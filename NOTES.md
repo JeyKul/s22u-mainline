@@ -1,5 +1,20 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: G3D FIRMWARE VERIFIES ON MAINLINE: it was the firmware file
+- sgpu loads "sgpu/vangogh_lite_unified.bin" with request_firmware_into_buf() first; the blob compiled
+  into sgpu.ko (unified_firmware_sign.h, what tools/extract-gpu-fw.py extracts) is only the fallback.
+  Three different signed builds (same size 0xdc000):
+  - unified_firmware_sign.h / embedded in sgpu.ko: sha256 2e2cf0b3... -> EL3 rejects (0x5106a, ~37 us)
+  - stock vendor_boot ramdisk00 /lib/firmware/sgpu/: 0982b7ed... -> verified (Samsung direct run)
+  - TWRP /lib/firmware/sgpu/: 13f03221... = TWRP's 0x8ff00000 region byte for byte (memdump module)
+- Mainline direct boot with the vendor_boot file on rootfs (/usr/lib/firmware/sgpu/, old one kept as
+  .xt-header), s2mpufd + fw: "fw verify: a0 0x0". Then a hang (RCU stall panic 31 s later), no
+  "fw boot" line: SMC 0x82000520 never returned.
+- Samsung's trace after the verify: c6000111(7) REQUEST_FW_STAGE2_AP, then 82000520(0). Ours skips
+  c6000111. Next boot: add it.
+- tools/extract-gpu-fw.py's blob is the wrong one for this device; the firmware has to come from
+  vendor_boot (Samsung's, not in this repo).
+
 ## 2026-11-20: GPU milestone 3: SMC/HVC trace of Samsung's kernel (G3D verify passes)
 - ref/xt-kernel b0s-direct: arch/arm64/kernel/b0s-smc-trace.c wraps __arm_smccc_{smc,hvc} (asm renamed
   __b0s_arm_smccc_*), static 16384-entry record from the first call, PSCI only counted;
