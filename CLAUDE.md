@@ -20,3 +20,15 @@ Mainline Linux on the Galaxy S22 Ultra (SM-S908B, b0s, Exynos 2200). Public repo
   Back to TWRP: `twrp` or Vol Up 2 s. Kernel/boot changes: flash from TWRP, rootfs changes: scp.
 - Kernel tree src/linux (branch b0s on v7.3); commit there and re-export: `git format-patch v7.3 -o ../../linux-patches`.
 - uniLoader in src/uniLoader (branch b0s); export to uniloader/.
+
+
+## Output (token budget)
+- Max 5 lines per reply unless I ask for more. No intro, no recap, no closing.
+- Format: what changed / what to run / what result means pass or fail. Nothing else.
+- Tables and long findings go in NOTES.md, not chat. In chat, one line: "NOTES.md updated: <topic>".
+- Never restate my message, the plan, or earlier results.
+- Don't explain reasoning unless asked "why". Don't list alternatives; pick one.
+- No hedging words. If unsure, say "unsure" and the one check that settles it.
+- Commands in a single code block, no commentary around them.
+- Asking me something: one question, yes/no or a short pick list.
+- Errors: last relevant log line only, not the whole dump
