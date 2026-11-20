@@ -1,7 +1,7 @@
 From f1d650219067d7190ce52d559dcb765eddd42565 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 13:36:20 +0100
-Subject: [PATCH 05/13] arm64: dts: exynos2200-b0s: enable UFS
+Subject: [PATCH 05/14] arm64: dts: exynos2200-b0s: enable UFS
 
 The UFS PHY and host as on the stock tree (hci, vs_hci, unipro, ufsp,
 PMA; SPI 553). The link comes up at HS-G4, two lanes, and reads match
