@@ -1,5 +1,23 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU driver plan: upstream amdgpu behind a fake PCI host
+- sgpu (Samsung's 5.10 amdgpu fork, 470k lines) for CHIP_VANGOGH_LITE: IP blocks = nv common,
+  gmc v10 (1 VM hub: GFXHUB only), vangogh_lite_ih (own IH), dce_virtual, gfx v10. No SDMA/PSP/SMU/
+  VCN/DCN. No VBIOS, no IP discovery, VRAM size 0 (nbio get_memsize -> 0), force GTT (GART table
+  in system RAM), dpm off, async gfx ring. Register bases (vangogh_lite_ip_offset.h): GC seg0
+  0x1260 seg1 0xA000 (dwords from 0x16e00000), NBIO 0/0x14/0xD20/0x10400/0x241B000.
+- GC 10.4.0 (Samsung headers) vs upstream GC 10.3.0: 4482 common registers, 36 differ
+  (VGT_*_RING_SIZE, VGT_TF_*, SPI_CONFIG_CNTL*, SPI_WAVE_LIMIT_CNTL, SQ_THREAD_TRACE_*, ...),
+  892 Samsung-only (debug/RSMU). GRBM_CHIP_REVISION 0xdc1+0x1260 -> 0x16e08084: same.
+- Stock DT sgpu: reg 0x16e00000/1M (GC, "smntarg"), 0x16f00000/1M doorbell, 0x16dc0000/256K
+  debug, 0x16cd0000/64K pm, 0x16c00000/8K sysreg; SPI 0x1d3 level; memory-region sgpu_rmem;
+  dma-coherent; power-domains pd_g3dcore.
+- Plan: (1) software PCI host (emulated config space, PROBE_ONLY): 1002:163F (Van Gogh, APU),
+  BAR5 = GC MMIO 0x16e00000/1M, BAR2 = doorbell 0x16f00000/1M, BAR0 tiny/none, INTx -> SPI 467,
+  PCIe cap with sane link, no ASPM/SR-IOV/ATS/PASID/ReBAR, dma-coherent of_node.
+  (2) amdgpu: explicit 163F entry, hardcoded IP versions (like Cyan Skillfish), no VBIOS, 0 VRAM.
+  Milestone: probe and read GRBM_CHIP_REVISION = 0x00600201 via amdgpu accessors.
+
 ## 2026-11-20: GPU FIRMWARE BOOTS ON MAINLINE (RLC autoload complete)
 - exynos2200-g3d: after verify, HVC 0xc6000111(7) REQUEST_FW_STAGE2_AP (from Samsung's trace), then
   SMC 0x82000520 boot. Sequence (debugfs): s2mpufd, on, fw ->
