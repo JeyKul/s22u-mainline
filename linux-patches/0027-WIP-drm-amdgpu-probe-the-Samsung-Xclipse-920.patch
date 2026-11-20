@@ -1,0 +1,123 @@
+From 754fbd585cc4270bbd36ec4b8bb2e6104a8101bf Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 21:52:32 +0100
+Subject: [PATCH 27/27] WIP: drm/amdgpu: probe the Samsung Xclipse 920
+
+Explicit 1002:163F entry (CHIP_VANGOGH | AMD_IS_APU) when the Exynos 2200
+PCI shim is built, hardcoded register bases instead of IP discovery.
+For now: read GRBM_CHIP_REVISION and stop.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile           |  2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c |  3 ++
+ drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c       |  5 +++
+ drivers/gpu/drm/amd/amdgpu/nv.h               |  1 +
+ .../gpu/drm/amd/amdgpu/xclipse920_reg_init.c  | 41 +++++++++++++++++++
+ 5 files changed, 51 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 105b9dcc1..a0ccd0049 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -66,7 +66,7 @@ amdgpu-y += amdgpu_device.o amdgpu_reg_access.o amdgpu_doorbell_mgr.o amdgpu_kms
+ 	amdgpu_atomfirmware.o amdgpu_vf_error.o amdgpu_sched.o \
+ 	amdgpu_debugfs.o amdgpu_ids.o amdgpu_gmc.o amdgpu_mmhub.o amdgpu_hdp.o \
+ 	amdgpu_xgmi.o amdgpu_csa.o amdgpu_ras.o amdgpu_vm_cpu.o \
+-	amdgpu_vm_sdma.o amdgpu_discovery.o amdgpu_ras_eeprom.o amdgpu_nbio.o \
++	amdgpu_vm_sdma.o amdgpu_discovery.o xclipse920_reg_init.o amdgpu_ras_eeprom.o amdgpu_nbio.o \
+ 	amdgpu_umc.o smu_v11_0_i2c.o amdgpu_fru_eeprom.o amdgpu_rap.o \
+ 	amdgpu_fw_attestation.o amdgpu_securedisplay.o \
+ 	amdgpu_eeprom.o amdgpu_mca.o amdgpu_psp_ta.o amdgpu_lsdma.o amdgpu_lockdep.o \
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c
+index 7ab2ad2c5..b7af319e7 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_discovery.c
+@@ -3087,6 +3087,9 @@ int amdgpu_discovery_set_ip_blocks(struct amdgpu_device *adev)
+ 	int r;
+ 
+ 	switch (adev->asic_type) {
++	case CHIP_VANGOGH:
++		/* only the Xclipse 920 gets here (explicit PCI ID, no discovery) */
++		return xclipse920_set_ip_blocks(adev);
+ 	case CHIP_VEGA10:
+ 		/* This is not fatal.  We only need the discovery
+ 		 * binary for sysfs.  We don't need it for a
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index d9d794a7d..4c409862e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -2190,6 +2190,11 @@ static const struct pci_device_id pciidlist[] = {
+ 	{ PCI_DEVICE(0x1002, 0x7424), .driver_data = CHIP_BEIGE_GOBY },
+ 	{ PCI_DEVICE(0x1002, 0x743F), .driver_data = CHIP_BEIGE_GOBY },
+ 
++#if IS_ENABLED(CONFIG_PCI_EXYNOS2200_GPU)
++	/* Samsung Xclipse 920, emulated PCI function (pci-exynos2200-gpu.c) */
++	{ PCI_DEVICE(0x1002, 0x163F), .driver_data = CHIP_VANGOGH | AMD_IS_APU },
++#endif
++
+ 	{ PCI_DEVICE(0x1002, PCI_ANY_ID),
+ 	  .class = PCI_CLASS_DISPLAY_VGA << 8,
+ 	  .class_mask = 0xffffff,
+diff --git a/drivers/gpu/drm/amd/amdgpu/nv.h b/drivers/gpu/drm/amd/amdgpu/nv.h
+index 8f4817404..1eb5c17b6 100644
+--- a/drivers/gpu/drm/amd/amdgpu/nv.h
++++ b/drivers/gpu/drm/amd/amdgpu/nv.h
+@@ -32,5 +32,6 @@ void nv_grbm_select(struct amdgpu_device *adev,
+ 		    u32 me, u32 pipe, u32 queue, u32 vmid);
+ void nv_set_virt_ops(struct amdgpu_device *adev);
+ int cyan_skillfish_reg_base_init(struct amdgpu_device *adev);
++int xclipse920_set_ip_blocks(struct amdgpu_device *adev);
+ 
+ #endif
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+new file mode 100644
+index 000000000..9b9023c81
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+@@ -0,0 +1,41 @@
++// SPDX-License-Identifier: MIT
++/*
++ * Samsung Xclipse 920 (Exynos 2200): an RDNA2 GC ("Van Gogh lite", GC 10.4)
++ * without IP discovery, VBIOS, VRAM, PSP or SMU, presented to amdgpu as
++ * 1002:163F by drivers/pci/controller/pci-exynos2200-gpu.c.
++ *
++ * Register bases are Samsung's (vangogh_lite_ip_offset.h), in dwords from
++ * the GC window (BAR5). GC 10.4 matches GC 10.3.0's register map except
++ * for 36 registers (ring sizes, SPI config, SQ thread trace).
++ */
++#include "amdgpu.h"
++#include "nv.h"
++#include "soc15_common.h"
++
++#include "gc/gc_10_3_0_offset.h"
++
++/* segment bases of instance 0; the other instances do not exist */
++static const u32 xclipse920_gc_base[6] = { 0x00001260, 0x0000a000 };
++static const u32 xclipse920_nbio_base[6] = { 0x00000000, 0x00000014, 0x00000d20,
++					     0x00010400, 0x0241b000 };
++static const u32 xclipse920_none[6];
++
++int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
++{
++	u32 i;
++
++	adev->gfx.xcc_mask = 1;
++	for (i = 0; i < HWIP_MAX_INSTANCE; ++i) {
++		adev->reg_offset[GC_HWIP][i] = (u32 *)(i ? xclipse920_none : xclipse920_gc_base);
++		adev->reg_offset[NBIO_HWIP][i] = (u32 *)(i ? xclipse920_none : xclipse920_nbio_base);
++	}
++	adev->ip_versions[GC_HWIP][0] = IP_VERSION(10, 3, 1);
++
++	/* bring-up milestone: amdgpu's own accessors reach the GC */
++	dev_info(adev->dev, "Xclipse 920: GRBM_CHIP_REVISION %08x GRBM_STATUS %08x GB_ADDR_CONFIG %08x\n",
++		 RREG32_SOC15(GC, 0, mmGRBM_CHIP_REVISION),
++		 RREG32_SOC15(GC, 0, mmGRBM_STATUS),
++		 RREG32_SOC15(GC, 0, mmGB_ADDR_CONFIG));
++
++	return -ENODEV;	/* IP blocks not wired up yet */
++}
+-- 
+2.56.0
+

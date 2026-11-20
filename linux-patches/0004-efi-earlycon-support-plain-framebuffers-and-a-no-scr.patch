@@ -1,7 +1,7 @@
 From 41201dbfd31ece9a8d4c91f3289920cac8e10a15 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 13:22:28 +0100
-Subject: [PATCH 04/24] efi/earlycon: support plain framebuffers and a
+Subject: [PATCH 04/27] efi/earlycon: support plain framebuffers and a
  no-scroll mode
 
 screen_info_fb=<base>,<width>,<height> describes a 32 bpp framebuffer

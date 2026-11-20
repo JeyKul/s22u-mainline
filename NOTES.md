@@ -1,5 +1,18 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: amdgpu probes the Xclipse 920 (GRBM_CHIP_REVISION 0x00600201)
+- drivers/pci/controller/pci-exynos2200-gpu.c: emulated PCI function 1002:163F class 0x038000, BAR2
+  doorbell 0x16f00000/1M, BAR5 GC 0x16e00000/1M, INTA -> SPI 467 (interrupt-map), PCIe RCiEP cap,
+  no MSI/ext caps. DT node needs `linux,pci-probe-only = <1>`: 7.3 sets bridge->preserve_config from
+  it at registration (setting it in the driver is overwritten); without it the BARs get swapped.
+- amdgpu: 163F -> CHIP_VANGOGH|AMD_IS_APU (only with the shim), amdgpu_discovery_set_ip_blocks
+  case CHIP_VANGOGH -> xclipse920_set_ip_blocks (GC/NBIO bases from Samsung, GC 10.3.1).
+- `echo on > /sys/kernel/debug/exynos2200-g3d; modprobe amdgpu` (blacklisted from autoload in
+  /etc/modprobe.d/amdgpu-manual.conf): "Xclipse 920: GRBM_CHIP_REVISION 00600201 GRBM_STATUS
+  0000302c GB_ADDR_CONFIG 00000142", then -ENODEV by design.
+- Mainline modules now built and installed to /usr/lib/modules/7.3.0-b0s+ (tar over ssh).
+- Next: IP blocks (nv common, gmc v10 w/ 0 VRAM + GTT, IH, gfx v10 + backdoor autoload).
+
 ## 2026-11-20: GPU driver plan: upstream amdgpu behind a fake PCI host
 - sgpu (Samsung's 5.10 amdgpu fork, 470k lines) for CHIP_VANGOGH_LITE: IP blocks = nv common,
   gmc v10 (1 VM hub: GFXHUB only), vangogh_lite_ih (own IH), dce_virtual, gfx v10. No SDMA/PSP/SMU/
