@@ -1,5 +1,23 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: S-Boot direct boot (no uniLoader) works; GPU verify unchanged
+- CONFIG_ARM64_B0S_DIRECT_BOOT (head.S preserve_boot_args: PMU nWDTRESET off, WTCON stop, DECON0
+  TRIG 0x1281, x21 = built-in __b0s_dtb) + built-in initramfs; tools/mkboot-direct.sh (src/build-direct,
+  drops the sboot-kernel-text reserve: S-Boot loads the kernel there).
+- Boot 1: stuck on the S-Boot splash, no serial gadget. Boot 2: red top 300 lines of fb from head.S
+  = shown: kernel entry runs. Boot 3: bands 1-3 (green/blue/yellow) after boot args, idmap, cpu_setup.
+- Boot 3: all 4 bands -> hang is after MMU on (early_map_kernel relocation or later). Boot 4: write
+  back a .rodata word (band 4 magenta) and a .text word (band 5 cyan): stage-2 RO on S-Boot text?
+- Boot 4: magenta + cyan shown: no stage-2 write block. Boot 5: fb mapped in init_idmap (device,
+  2M blocks, +2 pgdir pages); bands 6 white (MMU on), 7 orange (early_map_kernel), 8 grey (start_kernel).
+- Boot 5: white yes, orange no: hang in early_map_kernel. Cause: map_fdt() maps fdt..fdt+2M in the
+  init idmap; the built-in DTB sits in .rodata, already covered by block entries, which map_range
+  then walks as tables. Boot 6: copy the DTB to 0xa0000000 before the MMU goes on.
+- Boot 6: Arch boots straight from S-Boot (ACM shell, ssh). EL2: "Requested Kernel text
+  base[0x80078000]/size[0x17f50f0]" (real kernel, S-Boot load addr 0x80078000).
+- G3D verify (el2, s2mpufd, fw) under direct boot: still "Fail to verify signature (0x5106a)".
+  uniLoader / S-Boot's view of the kernel is not the G3D gate.
+
 ## 2026-11-20: GPU firmware verify: EL3 precondition, G3D_TMR is EL2's only "type 1"
 - Corrupted signature byte and corrupted body byte both still give 0x5106a in ~25 us (baseline
   25 us): EL3 rejects before parsing the signature. Earlier arg probes: 0x51023 (base 0x8fe00000)
