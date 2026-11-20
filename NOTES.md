@@ -1,5 +1,13 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
+- src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
+  build-twrp/Module.symvers; ioremap refuses 0x8ff00000: it is mapped RAM in TWRP's DT):
+  flip byte 0x1000 of the G3D fw at 0x8ff00000, timed HVC verify, restore, verify again.
+- Read works (0x84). The write hangs the CPU (hard LOCKUP panic, back in TWRP): after sgpu's
+  verify, EL2 makes the G3D_TMR region read-only at stage 2. No fresh EL3 verify possible in TWRP
+  after sgpu has loaded. -> PATH 2 (Samsung kernel from source, direct boot).
+
 ## 2026-11-20: GPU verify: not stale TWRP state; GPU parked
 - Test: no TWRP in the boot before. `poweroff` from mainline does not stay off with USB plugged in
   (reboots straight into our boot.img), so this was mainline -> reset -> mainline (direct boot).
