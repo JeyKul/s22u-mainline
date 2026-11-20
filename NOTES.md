@@ -1,5 +1,18 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: TEST A (other subsystem) and the G3D-only branch
+- TEST A: MFC (subsys 0, fw 0) with the stock vendor mfc_fw.bin at 0x80000000 (our reserved 4M),
+  hvc c6000110(0 80000000 100000 100000) = 0. EL2: "Derive new hash - MFC sub-system FW[0]" ->
+  "MFC sub-system[0] FW[0] is verified!" in ~13 ms. => EL3 CryptoManager works under our boot;
+  only G3D fails. (After a pass EL2 stage-2-protects the region: reading it hangs -> RCU stall
+  panic -> auto reboot.)
+- Vendor files: stock vendor (super extents 15616000+3059712, 19384320+136624 sectors) is F2FS
+  with compression -> CONFIG_F2FS_FS_COMPRESSION(+LZO/LZ4/ZSTD) added; loop-mounted on the phone.
+  VTS SRAM 0x2500000 holds live AArch64 code (not touched).
+- sgpu.ko's only secure calls before verify: PD on via exynos-pd (PMU seq + SMC 0x82000410).
+  G3D still 0x5106a with: GC held in reset (RSMU=0), GPU unpowered (fresh boot, no `on`),
+  PD TZ save (0x82000410,0,...) then restore. TWRP's own DTB has sgpu_rmem 0x8ff00000/0xe0000 too.
+
 ## 2026-11-20: GPU firmware verify: TWRP bisect (args vs state)
 - Out-of-tree modules for TWRP's kernel (5.10.223-Lunarixus, clang-12 cross-DSO CFI): built in
   src/build-twrp from the ExtremeXT tree + TWRP's /proc/config.gz, CRCs from TWRP's own modules,
