@@ -1,5 +1,15 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU, first step (ACPM DVFS) - in progress
+- The DT node acpm_dvfs (ACPM ch 5, q_len 1) is the MIF *notification* channel (APM -> AP),
+  not the DVFS request channel: that is why ch 5 never "opened" on XNU. Samsung's cal_if node
+  uses acpm-ipc-channel = 0 for DVFS requests (exynos_acpm_set_rate: cmd0 id, cmd1 kHz,
+  cmd2 FREQ_REQ, cmd3 timestamp). G3D id = GET_IDX(0xb04000d) = 13.
+- debugfs /sys/kernel/debug/acpm-dvfs ("chan id [kHz]"). First test: GET on ch 0, ids 0-15 all
+  return 0 with no kernel error -> check the response word (rxd[1]) / FREQ_GET format next.
+- S Pen: works (WEZ02, LDO11R on S2MPM07 SID 2); orientation not confirmed by the user yet.
+- Brightness: /sys/class/backlight/panel works.
+
 ## 2026-11-20: DSIM commands WORK after the stock re-init
 - drivers/gpu/drm/exynos2200: Samsung's DSIM cal (dsim_reg.c etc.) + debugfs test. Pause DECON TE
   trigger, dsim_reg_stop + dsim_reg_init (cmd mode, DSC 2x 720x193, 4 lanes, pms 5/0x59/0/0xac00,

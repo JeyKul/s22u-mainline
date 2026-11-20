@@ -1,0 +1,111 @@
+From fc6bfd80638822b1c41d79f07ce43ad6e8859f85 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:51:08 +0100
+Subject: [PATCH 19/19] WIP: firmware: samsung: acpm: debugfs for DVFS requests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/firmware/samsung/exynos-acpm-dvfs.c | 65 +++++++++++++++++++++
+ drivers/firmware/samsung/exynos-acpm-dvfs.h |  2 +
+ drivers/firmware/samsung/exynos-acpm.c      |  1 +
+ 3 files changed, 68 insertions(+)
+
+diff --git a/drivers/firmware/samsung/exynos-acpm-dvfs.c b/drivers/firmware/samsung/exynos-acpm-dvfs.c
+index 7266312ef..718d6a7f4 100644
+--- a/drivers/firmware/samsung/exynos-acpm-dvfs.c
++++ b/drivers/firmware/samsung/exynos-acpm-dvfs.c
+@@ -66,3 +66,68 @@ unsigned long acpm_dvfs_get_rate(struct acpm_handle *handle,
+ 
+ 	return xfer.rxd[1] * HZ_PER_KHZ;
+ }
++
++#ifdef CONFIG_DEBUG_FS
++#include <linux/debugfs.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++/*
++ * Bring-up access to ACPM DVFS: write "<chan> <id>" to read a domain's rate,
++ * "<chan> <id> <kHz>" to request one; reading returns the last result.
++ */
++static struct acpm_handle *acpm_dvfs_dbg_handle;
++static char acpm_dvfs_dbg_result[80];
++
++static ssize_t acpm_dvfs_dbg_write(struct file *file, const char __user *ubuf,
++				   size_t len, loff_t *ppos)
++{
++	unsigned int chan, id;
++	unsigned long khz;
++	char buf[64];
++	int n, ret;
++
++	if (len >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	n = sscanf(buf, "%u %i %lu", &chan, &id, &khz);
++	if (n == 2) {
++		unsigned long hz = acpm_dvfs_get_rate(acpm_dvfs_dbg_handle, chan, id);
++
++		snprintf(acpm_dvfs_dbg_result, sizeof(acpm_dvfs_dbg_result),
++			 "get chan %u id %u = %lu kHz\n", chan, id, hz / HZ_PER_KHZ);
++	} else if (n == 3) {
++		ret = acpm_dvfs_set_rate(acpm_dvfs_dbg_handle, chan, id,
++					 khz * HZ_PER_KHZ);
++		snprintf(acpm_dvfs_dbg_result, sizeof(acpm_dvfs_dbg_result),
++			 "set chan %u id %u <- %lu kHz (%d)\n", chan, id, khz, ret);
++	} else {
++		return -EINVAL;
++	}
++	return len;
++}
++
++static ssize_t acpm_dvfs_dbg_read(struct file *file, char __user *ubuf,
++				  size_t len, loff_t *ppos)
++{
++	return simple_read_from_buffer(ubuf, len, ppos, acpm_dvfs_dbg_result,
++				       strlen(acpm_dvfs_dbg_result));
++}
++
++static const struct file_operations acpm_dvfs_dbg_fops = {
++	.write = acpm_dvfs_dbg_write,
++	.read = acpm_dvfs_dbg_read,
++	.llseek = default_llseek,
++};
++
++void acpm_dvfs_debugfs_init(struct acpm_handle *handle)
++{
++	acpm_dvfs_dbg_handle = handle;
++	debugfs_create_file("acpm-dvfs", 0600, NULL, NULL, &acpm_dvfs_dbg_fops);
++}
++#else
++void acpm_dvfs_debugfs_init(struct acpm_handle *handle) { }
++#endif
+diff --git a/drivers/firmware/samsung/exynos-acpm-dvfs.h b/drivers/firmware/samsung/exynos-acpm-dvfs.h
+index b37b15426..39c4ece1a 100644
+--- a/drivers/firmware/samsung/exynos-acpm-dvfs.h
++++ b/drivers/firmware/samsung/exynos-acpm-dvfs.h
+@@ -18,4 +18,6 @@ unsigned long acpm_dvfs_get_rate(struct acpm_handle *handle,
+ 				 unsigned int acpm_chan_id,
+ 				 unsigned int clk_id);
+ 
++void acpm_dvfs_debugfs_init(struct acpm_handle *handle);
++
+ #endif /* __EXYNOS_ACPM_DVFS_H__ */
+diff --git a/drivers/firmware/samsung/exynos-acpm.c b/drivers/firmware/samsung/exynos-acpm.c
+index cb8b32381..dd5b3a5dc 100644
+--- a/drivers/firmware/samsung/exynos-acpm.c
++++ b/drivers/firmware/samsung/exynos-acpm.c
+@@ -766,6 +766,7 @@ static int acpm_probe(struct platform_device *pdev)
+ 	platform_set_drvdata(pdev, acpm);
+ 
+ 	acpm_pmic_debugfs_init(&acpm->handle, dev);
++	acpm_dvfs_debugfs_init(&acpm->handle);
+ 
+ 	if (!match_data->acpm_clk_dev_name)
+ 		return devm_of_platform_populate(dev);
+-- 
+2.56.0
+
