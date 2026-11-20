@@ -1,0 +1,355 @@
+From f945014ff909e07a7bbca7daacf53fe16ee31f09 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 17:48:20 +0100
+Subject: [PATCH 21/21] soc: samsung: add Exynos 2200 G3D power bring-up
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts |  10 +
+ drivers/soc/samsung/Kconfig                   |   8 +
+ drivers/soc/samsung/Makefile                  |   1 +
+ drivers/soc/samsung/exynos2200-g3d.c          | 282 ++++++++++++++++++
+ 4 files changed, 301 insertions(+)
+ create mode 100644 drivers/soc/samsung/exynos2200-g3d.c
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 19c53fa6b..c8e872e77 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -296,6 +296,16 @@ ap2apm_mailbox: mailbox@15900000 {
+ 		#mbox-cells = <0>;
+ 	};
+ 
++	/* G3D power sequence, debugfs-driven while it is brought up */
++	power-controller@16cd0000 {
++		compatible = "samsung,exynos2200-g3d-power";
++		reg = <0x15860000 0x10000>, <0x16c30000 0x2000>,
++		      <0x16c60000 0x1000>, <0x16c80000 0x1000>,
++		      <0x16cd0000 0x1000>;
++		reg-names = "pmu", "cmu", "dd", "strmux", "pwrctl";
++		samsung,tzpc-addr = <0x16c10204>;
++	};
++
+ 	/* takes over the DSI link S-Boot left running; panel brightness */
+ 	dsi@19eb0000 {
+ 		compatible = "samsung,exynos2200-dsim";
+diff --git a/drivers/soc/samsung/Kconfig b/drivers/soc/samsung/Kconfig
+index 1a5dfdc97..4575989d2 100644
+--- a/drivers/soc/samsung/Kconfig
++++ b/drivers/soc/samsung/Kconfig
+@@ -75,4 +75,12 @@ config SAMSUNG_PM_CHECK_CHUNKSIZE
+ config EXYNOS_REGULATOR_COUPLER
+ 	bool "Exynos SoC Regulator Coupler" if COMPILE_TEST
+ 	depends on ARCH_EXYNOS || COMPILE_TEST
++config EXYNOS2200_G3D_POWER
++	tristate "Exynos 2200 G3D power bring-up"
++	depends on ARCH_EXYNOS || COMPILE_TEST
++	depends on HAVE_ARM_SMCCC && DEBUG_FS
++	help
++	  Debugfs-driven power-on of the Exynos 2200 GPU block (PMU sequence
++	  and TZPC restore), for bringing up the Xclipse 920.
++
+ endif
+diff --git a/drivers/soc/samsung/Makefile b/drivers/soc/samsung/Makefile
+index 636a76260..dc77b80f4 100644
+--- a/drivers/soc/samsung/Makefile
++++ b/drivers/soc/samsung/Makefile
+@@ -11,6 +11,7 @@ exynos_pmu-y			+= exynos-pmu.o gs101-pmu.o
+ 
+ obj-$(CONFIG_EXYNOS_PMU_ARM_DRIVERS)	+= exynos3250-pmu.o exynos4-pmu.o \
+ 					exynos5250-pmu.o exynos5420-pmu.o
++obj-$(CONFIG_EXYNOS2200_G3D_POWER)	+= exynos2200-g3d.o
+ obj-$(CONFIG_EXYNOS_REGULATOR_COUPLER) += exynos-regulator-coupler.o
+ 
+ obj-$(CONFIG_SAMSUNG_PM_CHECK)	+= s3c-pm-check.o
+diff --git a/drivers/soc/samsung/exynos2200-g3d.c b/drivers/soc/samsung/exynos2200-g3d.c
+new file mode 100644
+index 000000000..220327a3f
+--- /dev/null
++++ b/drivers/soc/samsung/exynos2200-g3d.c
+@@ -0,0 +1,282 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Exynos 2200 G3D (Xclipse 920) power bring-up.
++ *
++ * Samsung's pmucal sequence for PD_G3DCORE on EVT1.1+ silicon, followed by
++ * the EL3 calls that restore the block's TZPC settings and release the GC
++ * reset. Driven by hand from debugfs while the sequence is being verified;
++ * every step is logged so a fault can be read back from pstore.
++ */
++
++#include <linux/arm-smccc.h>
++#include <linux/debugfs.h>
++#include <linux/delay.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/uaccess.h>
++
++/* PMU (always on) */
++#define PMU_VGPIO_TX_MONITOR	0x0a10
++#define PMU_G3DCORE_CONFIG	0x2280
++#define PMU_G3DCORE_STATUS	0x2284
++#define PMU_SPARE_CTRL		0x3c14
++#define PMU_V_PWREN		0x3ef0
++#define PMU_SET_ATOMIC		0xc000	/* write the bit number to set it */
++#define V_PWREN_G3D		10
++#define VGPIO_G3D_ACK		BIT(7)
++#define SPARE_CTRL_G3D_INIT	7	/* request to the APM, cleared when done */
++
++/* G3D blocks */
++#define CMU_PLL_CON0_PLL_G3D	0x0100
++#define CMU_PLL_CON1_PLL_G3D	0x0104
++#define CMU_HCHGEN_CLKMUX_CORE	0x0860
++#define PWRCTL_CTL2		0x0004
++#define PWRCTL_STATUS		0x0008
++#define PWRCTL_GPU_READY	BIT(1)
++#define DD_DUMP_CONFIG		0x0700
++#define GPU_BASE		0x16e00000
++#define RSMU_HARD_RESETB_GC	0x40008	/* secure: written through EL3 */
++
++#define SMC_CMD_PREPARE_PD_ONOFF	0x82000410
++#define EXYNOS_WAKEUP_PD_DOWN		1
++#define RUNTIME_PM_TZPC_GROUP		2
++#define SMC_CMD_REG			((unsigned long)-101)
++#define SMC_REG_SFR_W(a)		((0x1ul << 30) | ((a) >> 2))
++#define SMC_REG_SFR_R(a)		((0x3ul << 30) | ((a) >> 2))
++
++struct exynos2200_g3d {
++	struct device *dev;
++	void __iomem *pmu, *cmu, *dd, *strmux, *pwrctl;
++	u32 tz_addr;
++	struct dentry *dbg;
++};
++
++static void g3d_rmw(struct exynos2200_g3d *g, void __iomem *base, u32 off,
++		    u32 mask, u32 val, const char *name)
++{
++	u32 v;
++
++	dev_info(g->dev, "%s: read\n", name);
++	v = readl(base + off);
++	dev_info(g->dev, "%s: %08x -> %08x\n", name, v, (v & ~mask) | val);
++	writel((v & ~mask) | val, base + off);
++}
++
++static void g3d_status(struct exynos2200_g3d *g)
++{
++	dev_info(g->dev, "G3DCORE cfg %08x status %08x, V_PWREN %08x, VGPIO_TX %08x\n",
++		 readl(g->pmu + PMU_G3DCORE_CONFIG),
++		 readl(g->pmu + PMU_G3DCORE_STATUS),
++		 readl(g->pmu + PMU_V_PWREN),
++		 readl(g->pmu + PMU_VGPIO_TX_MONITOR));
++}
++
++static int g3d_tz_restore(struct exynos2200_g3d *g)
++{
++	struct arm_smccc_res res;
++
++	dev_info(g->dev, "TZPC restore %#x\n", g->tz_addr);
++	arm_smccc_smc(SMC_CMD_PREPARE_PD_ONOFF, EXYNOS_WAKEUP_PD_DOWN,
++		      g->tz_addr, RUNTIME_PM_TZPC_GROUP, 0, 0, 0, 0, &res);
++	dev_info(g->dev, "TZPC restore: a0 %#lx a1 %#lx\n", res.a0, res.a1);
++	return res.a0 ? -EIO : 0;
++}
++
++/* secure SFR access through EL3 (Samsung's exynos_smc_readsfr & co) */
++static int g3d_smc_sfr(struct exynos2200_g3d *g, phys_addr_t addr,
++		       bool write, u32 val)
++{
++	struct arm_smccc_res res;
++
++	dev_info(g->dev, "smc %s %pa\n", write ? "wr" : "rd", &addr);
++	if (write)
++		arm_smccc_smc(SMC_CMD_REG, SMC_REG_SFR_W(addr), val, 0, 0, 0, 0, 0,
++			      &res);
++	else
++		arm_smccc_smc(SMC_CMD_REG, SMC_REG_SFR_R(addr), 0, 0, 0, 0, 0, 0,
++			      &res);
++	dev_info(g->dev, "smc %pa: a0 %#lx a1 %#lx a2 %#lx\n", &addr,
++		 res.a0, res.a1, res.a2);
++	return res.a0 ? -EIO : 0;
++}
++
++/* g3dcore_on_evt1_1 */
++static int g3d_power_on(struct exynos2200_g3d *g)
++{
++	u32 v;
++	int ret;
++
++	g3d_status(g);
++
++	/* the G3D rail first: the CMU below lives on it */
++	dev_info(g->dev, "rail\n");
++	writel(V_PWREN_G3D, g->pmu + (PMU_V_PWREN | PMU_SET_ATOMIC));
++	ret = readl_poll_timeout(g->pmu + PMU_VGPIO_TX_MONITOR, v,
++				 v & VGPIO_G3D_ACK, 10, 10000);
++	if (ret) {
++		dev_err(g->dev, "no rail ack (%08x)\n", v);
++		return ret;
++	}
++	udelay(60);
++
++	g3d_rmw(g, g->cmu, CMU_PLL_CON0_PLL_G3D, BIT(4), 0, "PLL_CON0");
++	dev_info(g->dev, "PLL_CON1\n");
++	writel(0x38000002, g->cmu + CMU_PLL_CON1_PLL_G3D);
++
++	dev_info(g->dev, "PWRCTL_CTL2: read\n");
++	v = readl(g->pwrctl + PWRCTL_CTL2);
++	dev_info(g->dev, "PWRCTL_CTL2 %08x\n", v);
++	writel((v & ~0x3f) | (v & BIT(5) ? 0x2a : 0x12), g->pwrctl + PWRCTL_CTL2);
++
++	ret = readl_poll_timeout(g->pwrctl + PWRCTL_STATUS, v,
++				 v & PWRCTL_GPU_READY, 10, 100000);
++	dev_info(g->dev, "PWRCTL_STATUS %08x%s\n", v, ret ? " (timeout)" : "");
++	if (ret)
++		return ret;
++
++	g3d_rmw(g, g->dd, DD_DUMP_CONFIG, BIT(0), BIT(0), "dd_dump_config");
++	g3d_rmw(g, g->strmux, 0, BIT(0), BIT(0), "STR_MUX_CTRL");
++	g3d_rmw(g, g->cmu, CMU_HCHGEN_CLKMUX_CORE, BIT(0), BIT(0), "HCHGEN_CLKMUX");
++
++	g3d_status(g);
++	ret = g3d_tz_restore(g);
++	if (ret)
++		return ret;
++
++	/* g3dcore_cmu_init, first power-on only */
++	dev_info(g->dev, "cmu_init\n");
++	writel(SPARE_CTRL_G3D_INIT, g->pmu + (PMU_SPARE_CTRL | PMU_SET_ATOMIC));
++	ret = readl_poll_timeout(g->pmu + PMU_SPARE_CTRL, v,
++				 !(v & BIT(SPARE_CTRL_G3D_INIT)), 10, 100000);
++	dev_info(g->dev, "SPARE_CTRL %08x%s\n", v, ret ? " (timeout)" : "");
++	g3d_rmw(g, g->dd, DD_DUMP_CONFIG, BIT(0), BIT(0), "dd_dump_config");
++	if (ret)
++		return ret;
++
++	/* GC stays in reset (bus timeouts -> SError) until released here */
++	return g3d_smc_sfr(g, GPU_BASE + RSMU_HARD_RESETB_GC, true, 1);
++}
++
++/* bring-up access with plain 32-bit loads/stores */
++static int g3d_peek_poke(struct exynos2200_g3d *g, phys_addr_t addr,
++			 bool write, u32 val)
++{
++	void __iomem *p = ioremap(addr & ~3, 4);
++
++	if (!p)
++		return -ENOMEM;
++	dev_info(g->dev, "%s %pa\n", write ? "wr" : "rd", &addr);
++	if (write)
++		writel(val, p);
++	dev_info(g->dev, "%pa = %08x\n", &addr, readl(p));
++	iounmap(p);
++	return 0;
++}
++
++static ssize_t g3d_dbg_write(struct file *f, const char __user *ubuf,
++			     size_t count, loff_t *ppos)
++{
++	struct exynos2200_g3d *g = file_inode(f)->i_private;
++	char buf[48], op[5];
++	unsigned long long addr;
++	u32 val;
++	int n, ret = 0;
++
++	if (count >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, count))
++		return -EFAULT;
++	buf[count] = '\0';
++
++	if (sysfs_streq(buf, "on"))
++		ret = g3d_power_on(g);
++	else if (sysfs_streq(buf, "tz"))
++		ret = g3d_tz_restore(g);
++	else if (sysfs_streq(buf, "status"))
++		g3d_status(g);
++	else if ((n = sscanf(buf, "%4s %llx %x", op, &addr, &val)) >= 2 &&
++		 (!strcmp(op, "rd") || (!strcmp(op, "wr") && n == 3)))
++		ret = g3d_peek_poke(g, addr, op[0] == 'w', val);
++	else if (n >= 2 &&
++		 (!strcmp(op, "srd") || (!strcmp(op, "swr") && n == 3)))
++		ret = g3d_smc_sfr(g, addr, op[1] == 'w', val);
++	else
++		return -EINVAL;
++
++	return ret ?: count;
++}
++
++static const struct file_operations g3d_dbg_fops = {
++	.open = simple_open,
++	.write = g3d_dbg_write,
++};
++
++static void __iomem *g3d_map(struct platform_device *pdev, const char *name)
++{
++	struct resource *res;
++
++	/* the PMU is shared with the syscon: map, don't claim */
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, name);
++	if (!res)
++		return IOMEM_ERR_PTR(-EINVAL);
++	return devm_ioremap(&pdev->dev, res->start, resource_size(res)) ?:
++	       IOMEM_ERR_PTR(-ENOMEM);
++}
++
++static int exynos2200_g3d_probe(struct platform_device *pdev)
++{
++	struct exynos2200_g3d *g;
++
++	g = devm_kzalloc(&pdev->dev, sizeof(*g), GFP_KERNEL);
++	if (!g)
++		return -ENOMEM;
++	g->dev = &pdev->dev;
++
++	g->pmu = g3d_map(pdev, "pmu");
++	g->cmu = g3d_map(pdev, "cmu");
++	g->dd = g3d_map(pdev, "dd");
++	g->strmux = g3d_map(pdev, "strmux");
++	g->pwrctl = g3d_map(pdev, "pwrctl");
++	if (IS_ERR(g->pmu) || IS_ERR(g->cmu) || IS_ERR(g->dd) ||
++	    IS_ERR(g->strmux) || IS_ERR(g->pwrctl))
++		return -ENOMEM;
++
++	if (of_property_read_u32(pdev->dev.of_node, "samsung,tzpc-addr",
++				 &g->tz_addr))
++		return -EINVAL;
++
++	g3d_status(g);
++	g->dbg = debugfs_create_file("exynos2200-g3d", 0200, NULL, g,
++				     &g3d_dbg_fops);
++	platform_set_drvdata(pdev, g);
++	return 0;
++}
++
++static void exynos2200_g3d_remove(struct platform_device *pdev)
++{
++	struct exynos2200_g3d *g = platform_get_drvdata(pdev);
++
++	debugfs_remove(g->dbg);
++}
++
++static const struct of_device_id exynos2200_g3d_of_match[] = {
++	{ .compatible = "samsung,exynos2200-g3d-power" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, exynos2200_g3d_of_match);
++
++static struct platform_driver exynos2200_g3d_driver = {
++	.driver = {
++		.name = "exynos2200-g3d",
++		.of_match_table = exynos2200_g3d_of_match,
++	},
++	.probe = exynos2200_g3d_probe,
++	.remove = exynos2200_g3d_remove,
++};
++module_platform_driver(exynos2200_g3d_driver);
++
++MODULE_DESCRIPTION("Exynos 2200 G3D power bring-up");
++MODULE_LICENSE("GPL");
+-- 
+2.56.0
+

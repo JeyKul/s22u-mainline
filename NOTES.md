@@ -1,5 +1,21 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU powers on and answers MMIO
+- echo on > /sys/kernel/debug/exynos2200-g3d (drivers/soc/samsung/exynos2200-g3d.c), then
+  GRBM_STATUS (0x16e08010) = 0x302c (idle), GRBM_CHIP_REVISION (0x16e08084) = 0x00600201 = MGFX0
+  EVT1.1, GB_ADDR_CONFIG 0x142, CC_GC_SHADER_ARRAY_CONFIG 0xfff80000 (3 WGPs per SA).
+- Sequence (SoC rev 0x12 -> Samsung's g3dcore_on_evt1_1): V_PWREN bit 10 via PMU atomic set (write the
+  bit *number* to reg|0xc000), wait VGPIO_TX bit 7; PLL_CON0_PLL_G3D bit4=0, PLL_CON1=0x38000002;
+  BG3D_PWRCTL_CTL2 cond-write, wait STATUS bit 1; dd_dump_config, STR_MUX, HCHGEN = 1 -> G3DCORE_STATUS 1.
+  Then SMC 0x82000410 (1, 0x16c10204, 2) = DTZPC restore (a1 0x27 = S2MPU pd id, HVC restore not done
+  yet); cmu_init = PMU SPARE_CTRL bit 7 (APM clears it); and **RSMU_HARD_RESETB_GC (0x16e40008) = 1
+  via SMC_CMD_REG (-101, SFR_W)**: without it every GC read is an SError ~60 ms later (bus timeout).
+- Dead ends: BG3D_PWRCTL+0 is not a register (SError); SMC SFR *reads* return a0 0 but no value.
+- ACPM DVFS SET ch 0 id 13 303000 kHz returns 0 and switches PLL_CON0_PLL_G3D back to the PLL
+  (GET still 0). G3D buck (S2MPS25 BUCK4-6) reads 0x1f/0x20 (~0.5 V) either way: check the DVS slot.
+- ramoops at 0x9_ffe00000 + panic=5: panics come back in /sys/fs/pstore on the next boot.
+- TWRP's Samsung kernel runs sgpu fine (rings, IFPO): /sys/kernel/debug/dri/0/sgpu_dmsg_log.
+
 ## 2026-11-20: GPU, first step (ACPM DVFS) - in progress
 - The DT node acpm_dvfs (ACPM ch 5, q_len 1) is the MIF *notification* channel (APM -> AP),
   not the DVFS request channel: that is why ch 5 never "opened" on XNU. Samsung's cal_if node
