@@ -1,5 +1,50 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: HANDOFF: amdgpu bring-up state (stopped mid-step)
+Where it stands
+- Phone: mainline direct boot (out/boot-direct.img, built by tools/mkboot-direct.sh) with the GPU PCI
+  shim + 127 MiB carve-out DT. /usr/lib/modules/7.3.0-b0s+ installed; amdgpu.ko there = commit
+  "WIP: drm/amdgpu: Xclipse 920 common + GMC blocks" (linux-patches/0028). Rootfs firmware:
+  /usr/lib/firmware/sgpu/vangogh_lite_unified.bin = vendor_boot's (sha256 0982b7ed...), the
+  xt-header blob kept as .xt-header.
+- amdgpu with common + gmc_v10: VBIOS skipped (amdgpu_device_get_vbios_flags), ASIC reset no-op
+  (nv_asic_reset), cg/pg 0 (nv.c), then NULL deref in amdgpu_device_ip_early_init
+  (amdgpu_device.c ~2178): amdgpu_device_ip_get_ip_block(GFX) returns NULL and is dereferenced.
+  Pending idea (NOT applied): guard `if (ip_block && ...)` to see common+GMC finish, or go straight
+  to adding IH + GFX.
+- tools/amdgpu-test.sh: rebuild amdgpu.ko, install over ssh, reboot, `echo on` (g3d power),
+  modprobe amdgpu, print the log. amdgpu is blacklisted from autoload
+  (/etc/modprobe.d/amdgpu-manual.conf) because it must load after `echo on`.
+Design decisions (see the entries below for the evidence)
+- Fake PCI host (drivers/pci/controller/pci-exynos2200-gpu.c): 1002:163F class 0x038000, BAR5 GC
+  0x16e00000, BAR2 doorbell 0x16f00000, BAR0 unimplemented, INTA -> SPI 467, RCiEP cap, DT needs
+  linux,pci-probe-only. amdgpu: 163F -> CHIP_VANGOGH|AMD_IS_APU only with the shim;
+  amdgpu_is_xclipse920() = asic_type == CHIP_VANGOGH (real Van Gogh goes through discovery).
+- Memory: VRAM = no-map carve-out 0x88000000..0x8fefffff (checked free in stock live DT and TWRP
+  /proc/iomem). GCMC_VM_FB_LOCATION_BASE 0x88 / TOP 0x8f / FB_OFFSET 0x88 (MC == PA), programmed
+  in xclipse920_set_ip_blocks; FB covers the TMR 0x8ff00000 but the VRAM manager does not.
+  gmc aper_base = FB physical (not BAR0). AGP stays off (amdgpu_agp default). MMHUB: no-op funcs,
+  vmhubs_mask = GFXHUB only. No SDMA (sgpu has none): no buffer funcs, CPU copies.
+- NBIO: copy of nbio_v2_3_funcs with get_rev_id = 0 and get_memsize = carve-out (upstream reads
+  PCIe straps sgpu never touches).
+Next steps, in order
+1. IH: port sgpu's vangogh_lite_ih.c (ref/xt-kernel/drivers/gpu/drm/samsung/sgpu) as an IP block.
+2. GFX: gfx_v10_0 with a new "preloaded by EL3" firmware case: no init_microcode/request_firmware,
+   no RLC/CP ucode upload, no RLC restart; resume only checks RLC_RLCS_BOOTLOAD_STATUS complete.
+   The firmware boot itself stays in drivers/soc/samsung/exynos2200-g3d.c for now (debugfs: s2mpufd,
+   on, fw = verify, c6000111 stage-2 AP, 0x82000520 boot). Check sgpu's gfx_v10_0.c VANGOGH_LITE
+   branches and the 36 GC 10.4 vs 10.3 register differences (VGT_*_RING_SIZE, SPI_CONFIG_CNTL*, ...).
+3. Target: GFX ring test, then IB test (then Mesa).
+4. Later: shim powers G3D on itself (pd_g3dcore ref) so amdgpu can autoload; runtime PM.
+Repo map for this work
+- linux-patches/: mainline 7.3 tree (src/linux, branch b0s) incl. shim, amdgpu WIP, g3d driver.
+- xt-patches/: Samsung 5.10 ExtremeXT tree (ref/xt-kernel, base 0d060df61, branch b0s-direct):
+  direct-boot bands/fb console/RAM log/SMC-HVC trace. tools/mkboot-xt.sh builds boot-xt.img.
+- tools/xtinit/: /init for the Samsung kernel. tools/twrp-modules/: TWRP probe modules + build.sh.
+- research/logs/: Samsung direct-boot log + SMC/HVC trace (identifiers scrubbed).
+- Flash: from mainline `tools/flash-boot-ssh.sh <img>`; from TWRP `tools/flash-boot.sh <img>`.
+  `screen-off` / `screen-on` on the phone blank the panel.
+
 ## 2026-11-20: amdgpu probes the Xclipse 920 (GRBM_CHIP_REVISION 0x00600201)
 - drivers/pci/controller/pci-exynos2200-gpu.c: emulated PCI function 1002:163F class 0x038000, BAR2
   doorbell 0x16f00000/1M, BAR5 GC 0x16e00000/1M, INTA -> SPI 467 (interrupt-map), PCIe RCiEP cap,
