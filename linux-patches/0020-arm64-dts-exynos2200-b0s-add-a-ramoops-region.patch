@@ -1,0 +1,37 @@
+From 04e37fd5e1b1da999b05c5f2cbee95298593c519 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 17:47:18 +0100
+Subject: [PATCH 20/21] arm64: dts: exynos2200-b0s: add a ramoops region
+
+Keeps the kernel log across a warm reset, so a panic can be read back
+from pstore on the next boot.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index e0def8f35..19c53fa6b 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -149,6 +149,16 @@ teegris@ed310000 {
+ 			no-map;
+ 		};
+ 
++		/* kernel log across a warm reset (panic=5), read back via pstore */
++		ramoops@9ffe00000 {
++			compatible = "ramoops";
++			reg = <0x9 0xffe00000 0x0 0x200000>;
++			record-size = <0x80000>;
++			console-size = <0x80000>;
++			pmsg-size = <0x20000>;
++			ecc-size = <16>;
++		};
++
+ 		cont_splash_mem: framebuffer@f6200000 {
+ 			reg = <0x0 0xf6200000 0x0 (1440 * 3088 * 4)>;
+ 			no-map;
+-- 
+2.56.0
+
