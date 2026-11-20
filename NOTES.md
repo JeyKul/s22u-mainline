@@ -19,7 +19,16 @@
 - build-twrp/Module.symvers: CRCs of all 3474 symbols TWRP's own modules import, added.
 - fb text console via the linear map (fb memblock_reserve'd, __flush_dcache_area per glyph) works.
   Samsung kernel boots to kernel_init, then panics "VFS: Unable to mount root fs on
-  unknown-block(0,0)": our ramdisk's /init never shows up (initramfs not unpacked?).
+  unknown-block(0,0)": our ramdisk's /init never shows up.
+- Ramdisk fixes: S-Boot puts the stock vendor ramdisks (LZ4 legacy x2) in front; gzip after them
+  -> "rootfs image is not initramfs (Decoding failed)". Pack ours with lz4 -l. ("bootconfig" also
+  added to the boot cmdline; vendor cmdline already has it.)
+- Module order: this tree splits symbols differently from TWRP's build (1345 dep inversions in
+  TWRP's order); mkboot-xt.sh now orders by our modules.dep. Our kernel's log (dss loaded) shows
+  up in TWRP's /proc/last_kmsg after the next reboot.
+- Run 3: /init + 315 modules, then panic at 4.6 s: "(1ac40000.sysmmu) From [DPU_DMA_TOP], SysMMU
+  READ PAGE FAULT at 0xf627f940": the DPU driver turns its SysMMU on while DECON still scans the
+  boot fb. Display modules (exynos-drm, mcd-panel*, dependents) now left out: 289 modules.
 
 ## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
 - src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
