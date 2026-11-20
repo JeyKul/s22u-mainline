@@ -1,5 +1,19 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: TEST B1 (Samsung kernel from boot) inconclusive, paused
+- boot-b1.img = TWRP kernel + ramdisk with a static /init (src/b1init: load TWRP's
+  modules.load.recovery minus sgpu & its 12 dependents and softdog, pet watchdog0, insmod the
+  verify probe, save logs to userdata) built in out/b1 (not committed: contains TWRP binaries).
+- 4 attempts, all back in TWRP after 57-177 s without a single line from /init (not in last_kmsg,
+  not on userdata even when written from the first instruction). First attempt: S-Boot log
+  showed CL0_WDTRESET + PANIC. So S-Boot-direct boot of this kernel with the normal-boot
+  vendor_boot DTB/cmdline never reaches /init; making it boot needs more work (cmdline,
+  bootconfig, early console) than the question is worth right now.
+- Status of the G3D gate: EL2 args proven (TWRP, cached hash), EL3 CryptoManager works for us
+  (MFC verified fresh in 13 ms), only G3D_TMR's signature step fails fast with 0x5106a, independent
+  of GPU power/reset/clock state, SSP/STRONG state and S-Boot's kernel text info.
+- Restored mainline boot.img.
+
 ## 2026-11-20: GPU firmware verify: TEST A (other subsystem) and the G3D-only branch
 - TEST A: MFC (subsys 0, fw 0) with the stock vendor mfc_fw.bin at 0x80000000 (our reserved 4M),
   hvc c6000110(0 80000000 100000 100000) = 0. EL2: "Derive new hash - MFC sub-system FW[0]" ->
