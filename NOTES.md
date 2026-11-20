@@ -9,6 +9,14 @@
 - src/xtinit: TWRP's modules.load.recovery order (sgpu at 107, softdog and 12 not-built modules
   dropped), bands 4-7, dmesg + EL2 log to /data/root/xt-*.log, reboot to recovery. out/xt/boot-xt.img.
 - Boot 1: red, green, blue; no yellow: hangs between MMU on and kernel_init.
+- Boots 2-6: always stops after the first post-mm_init band (magenta). Cause = my own painter:
+  Samsung's DT does not reserve the boot fb 0xf6200000 (only s3cfb.bootloaderfb= on the cmdline,
+  nothing built-in parses it), so after mm_init it is buddy RAM and painting it corrupts the
+  kernel. Fix: memblock_reserve the fb right after setup_arch (debug builds only).
+- RAM console (init/main.c b0s_log: printk to 0xffa10000, in log_arrdumpreset; previous boot kept at
+  +256K) + fb text console (8x16 x2). src/twrp-b0slog dumps it from TWRP (/sys/kernel/b0slog/{0,1}).
+  After a Power+VolDown forced reset the RAM log was badly bit-decayed: unreadable.
+- build-twrp/Module.symvers: CRCs of all 3474 symbols TWRP's own modules import, added.
 
 ## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
 - src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
