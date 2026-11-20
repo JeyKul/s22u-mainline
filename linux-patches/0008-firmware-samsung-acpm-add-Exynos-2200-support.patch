@@ -1,0 +1,340 @@
+From 630dab509f8509e880818751032ed240a0c92612 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:04:12 +0100
+Subject: [PATCH 8/9] firmware: samsung: acpm: add Exynos 2200 support
+
+Exynos 2200 ACPM firmware uses the gs101 shared-memory layout with the
+init data at 0xf800, and the exynos850 mailbox layout (doorbell in
+INTGR0 << 16). Differences handled here:
+
+- two of its 13 channels have no SRAM queues (they are served through
+  the mailbox registers); skip them instead of mapping garbage offsets;
+- its PMIC firmware is the SPMI flavour, which takes the PMIC SID in
+  bits 27:24 of cmd[1] instead of bits 15:12 of cmd[0];
+- there is no ACPM clock device and no mailbox clock to manage.
+
+Also add a debugfs file for PMIC register access during bring-up.
+
+Tested on the Galaxy S22 Ultra: reads of S2MPS25 LDO28M and S2MPS26
+LDO17S return the values uniLoader programmed (0xd8, 0xf0).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/firmware/samsung/exynos-acpm-pmic.c | 89 +++++++++++++++++++++
+ drivers/firmware/samsung/exynos-acpm-pmic.h |  3 +
+ drivers/firmware/samsung/exynos-acpm.c      | 37 +++++++++
+ drivers/firmware/samsung/exynos-acpm.h      |  1 +
+ drivers/mailbox/exynos-mailbox.c            |  7 +-
+ 5 files changed, 136 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/firmware/samsung/exynos-acpm-pmic.c b/drivers/firmware/samsung/exynos-acpm-pmic.c
+index f032f2c69..ab17124d9 100644
+--- a/drivers/firmware/samsung/exynos-acpm-pmic.c
++++ b/drivers/firmware/samsung/exynos-acpm-pmic.c
+@@ -22,6 +22,8 @@
+ #define ACPM_PMIC_MASK			GENMASK(23, 16)
+ #define ACPM_PMIC_VALUE			GENMASK(15, 8)
+ #define ACPM_PMIC_FUNC			GENMASK(7, 0)
++/* SPMI-style firmware (Exynos 2200): the PMIC SID goes into cmd[1] */
++#define ACPM_PMIC_SID			GENMASK(27, 24)
+ 
+ #define ACPM_PMIC_BULK_SHIFT		8
+ #define ACPM_PMIC_BULK_MASK		GENMASK(7, 0)
+@@ -58,6 +60,18 @@ static inline u32 acpm_pmic_get_bulk(u32 data, unsigned int i)
+ 	return (data >> (ACPM_PMIC_BULK_SHIFT * i)) & ACPM_PMIC_BULK_MASK;
+ }
+ 
++/* Move the channel (PMIC SID) to where SPMI-style firmware expects it. */
++static void acpm_pmic_fixup_sid(struct acpm_handle *handle, u32 cmd[4])
++{
++	u32 sid = FIELD_GET(ACPM_PMIC_CHANNEL, cmd[0]);
++
++	if (!acpm_pmic_sid_in_cmd1(handle))
++		return;
++
++	cmd[0] &= ~ACPM_PMIC_CHANNEL;
++	cmd[1] |= FIELD_PREP(ACPM_PMIC_SID, sid);
++}
++
+ static void acpm_pmic_init_read_cmd(u32 cmd[4], u8 type, u8 reg, u8 chan)
+ {
+ 	cmd[0] = FIELD_PREP(ACPM_PMIC_TYPE, type) |
+@@ -76,6 +90,7 @@ int acpm_pmic_read_reg(struct acpm_handle *handle,
+ 	int ret;
+ 
+ 	acpm_pmic_init_read_cmd(cmd, type, reg, chan);
++	acpm_pmic_fixup_sid(handle, cmd);
+ 	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+ 
+ 	ret = acpm_do_xfer(handle, &xfer);
+@@ -109,6 +124,7 @@ int acpm_pmic_bulk_read(struct acpm_handle *handle,
+ 		return -EINVAL;
+ 
+ 	acpm_pmic_init_bulk_read_cmd(cmd, type, reg, chan, count);
++	acpm_pmic_fixup_sid(handle, cmd);
+ 	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+ 
+ 	ret = acpm_do_xfer(handle, &xfer);
+@@ -149,6 +165,7 @@ int acpm_pmic_write_reg(struct acpm_handle *handle,
+ 	int ret;
+ 
+ 	acpm_pmic_init_write_cmd(cmd, type, reg, chan, value);
++	acpm_pmic_fixup_sid(handle, cmd);
+ 	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+ 
+ 	ret = acpm_do_xfer(handle, &xfer);
+@@ -189,6 +206,7 @@ int acpm_pmic_bulk_write(struct acpm_handle *handle,
+ 		return -EINVAL;
+ 
+ 	acpm_pmic_init_bulk_write_cmd(cmd, type, reg, chan, count, buf);
++	acpm_pmic_fixup_sid(handle, cmd);
+ 	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+ 
+ 	ret = acpm_do_xfer(handle, &xfer);
+@@ -219,6 +237,7 @@ int acpm_pmic_update_reg(struct acpm_handle *handle,
+ 	int ret;
+ 
+ 	acpm_pmic_init_update_cmd(cmd, type, reg, chan, value, mask);
++	acpm_pmic_fixup_sid(handle, cmd);
+ 	acpm_set_xfer(&xfer, cmd, ARRAY_SIZE(cmd), acpm_chan_id, true);
+ 
+ 	ret = acpm_do_xfer(handle, &xfer);
+@@ -227,3 +246,73 @@ int acpm_pmic_update_reg(struct acpm_handle *handle,
+ 
+ 	return acpm_pmic_to_linux_err(FIELD_GET(ACPM_PMIC_RETURN, xfer.rxd[1]));
+ }
++
++#ifdef CONFIG_DEBUG_FS
++#include <linux/debugfs.h>
++#include <linux/device.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++/*
++ * Bring-up access to the PMICs: write "<acpm-chan> <sid> <type> <reg>" to
++ * read a register, "<acpm-chan> <sid> <type> <reg> <value>" to write one;
++ * reading the file returns the last result.
++ */
++static struct acpm_handle *acpm_pmic_dbg_handle;
++static char acpm_pmic_dbg_result[64];
++
++static ssize_t acpm_pmic_dbg_write(struct file *file, const char __user *ubuf,
++				   size_t len, loff_t *ppos)
++{
++	unsigned int chan, sid, type, reg, val;
++	char buf[64];
++	u8 v;
++	int n, ret;
++
++	if (len >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	n = sscanf(buf, "%i %i %i %i %i", &chan, &sid, &type, &reg, &val);
++	if (n == 4) {
++		ret = acpm_pmic_read_reg(acpm_pmic_dbg_handle, chan, type, reg,
++					 sid, &v);
++		snprintf(acpm_pmic_dbg_result, sizeof(acpm_pmic_dbg_result),
++			 "read sid %u type 0x%02x reg 0x%02x = 0x%02x (%d)\n",
++			 sid, type, reg, v, ret);
++	} else if (n == 5) {
++		ret = acpm_pmic_write_reg(acpm_pmic_dbg_handle, chan, type, reg,
++					  sid, val);
++		snprintf(acpm_pmic_dbg_result, sizeof(acpm_pmic_dbg_result),
++			 "write sid %u type 0x%02x reg 0x%02x <- 0x%02x (%d)\n",
++			 sid, type, reg, val, ret);
++	} else {
++		return -EINVAL;
++	}
++
++	return len;
++}
++
++static ssize_t acpm_pmic_dbg_read(struct file *file, char __user *ubuf,
++				  size_t len, loff_t *ppos)
++{
++	return simple_read_from_buffer(ubuf, len, ppos, acpm_pmic_dbg_result,
++				       strlen(acpm_pmic_dbg_result));
++}
++
++static const struct file_operations acpm_pmic_dbg_fops = {
++	.write = acpm_pmic_dbg_write,
++	.read = acpm_pmic_dbg_read,
++	.llseek = default_llseek,
++};
++
++void acpm_pmic_debugfs_init(struct acpm_handle *handle, struct device *dev)
++{
++	acpm_pmic_dbg_handle = handle;
++	debugfs_create_file("acpm-pmic", 0600, NULL, NULL, &acpm_pmic_dbg_fops);
++}
++#else
++void acpm_pmic_debugfs_init(struct acpm_handle *handle, struct device *dev) { }
++#endif
+diff --git a/drivers/firmware/samsung/exynos-acpm-pmic.h b/drivers/firmware/samsung/exynos-acpm-pmic.h
+index 88ae9aada..e0b699298 100644
+--- a/drivers/firmware/samsung/exynos-acpm-pmic.h
++++ b/drivers/firmware/samsung/exynos-acpm-pmic.h
+@@ -26,4 +26,7 @@ int acpm_pmic_bulk_write(struct acpm_handle *handle,
+ int acpm_pmic_update_reg(struct acpm_handle *handle,
+ 			 unsigned int acpm_chan_id, u8 type, u8 reg, u8 chan,
+ 			 u8 value, u8 mask);
++struct device;
++void acpm_pmic_debugfs_init(struct acpm_handle *handle, struct device *dev);
++
+ #endif /* __EXYNOS_ACPM_PMIC_H__ */
+diff --git a/drivers/firmware/samsung/exynos-acpm.c b/drivers/firmware/samsung/exynos-acpm.c
+index 942a2e9f0..cb8b32381 100644
+--- a/drivers/firmware/samsung/exynos-acpm.c
++++ b/drivers/firmware/samsung/exynos-acpm.c
+@@ -40,6 +40,7 @@
+ #define ACPM_TX_TIMEOUT_US		500000
+ 
+ #define ACPM_GS101_INITDATA_BASE	0xa000
++#define ACPM_EXYNOS2200_INITDATA_BASE	0xf800
+ 
+ /**
+  * struct acpm_shmem - shared memory configuration information.
+@@ -173,6 +174,8 @@ struct acpm_chan {
+ struct acpm_info {
+ 	struct acpm_shmem __iomem *shmem;
+ 	void __iomem *sram_base;
++	resource_size_t sram_size;
++	bool pmic_sid_in_cmd1;
+ 	struct acpm_chan *chans;
+ 	struct device *dev;
+ 	struct acpm_handle handle;
+@@ -187,11 +190,17 @@ struct acpm_info {
+ struct acpm_match_data {
+ 	loff_t initdata_base;
+ 	const char *acpm_clk_dev_name;
++	bool pmic_sid_in_cmd1;
+ };
+ 
+ #define client_to_acpm_chan(c) container_of(c, struct acpm_chan, cl)
+ #define handle_to_acpm_info(h) container_of(h, struct acpm_info, handle)
+ 
++bool acpm_pmic_sid_in_cmd1(struct acpm_handle *handle)
++{
++	return handle_to_acpm_info(handle)->pmic_sid_in_cmd1;
++}
++
+ /**
+  * acpm_get_saved_rx() - get the response if it was already saved.
+  * @achan:	ACPM channel info.
+@@ -471,6 +480,8 @@ int acpm_do_xfer(struct acpm_handle *handle, const struct acpm_xfer *xfer)
+ 		return -EINVAL;
+ 
+ 	achan = &acpm->chans[xfer->acpm_chan_id];
++	if (!achan->chan)
++		return -EOPNOTSUPP;
+ 
+ 	if (!xfer->txd ||
+ 	    (xfer->txcnt * sizeof(*xfer->txd) > achan->mlen) ||
+@@ -648,6 +659,16 @@ static int acpm_channels_init(struct acpm_info *acpm)
+ 
+ 		achan->acpm = acpm;
+ 
++		/*
++		 * Some firmware (Exynos 2200) has channels without SRAM queues:
++		 * they are served through the mailbox registers instead.
++		 */
++		if (readl(&chan_shmem->rx_base) >= acpm->sram_size ||
++		    readl(&chan_shmem->tx_base) >= acpm->sram_size) {
++			dev_dbg(dev, "channel %d has no SRAM queues, skipped\n", i);
++			continue;
++		}
++
+ 		acpm_chan_shmem_get_params(achan, chan_shmem);
+ 
+ 		ret = acpm_achan_alloc_cmds(achan);
+@@ -721,6 +742,7 @@ static int acpm_probe(struct platform_device *pdev)
+ 				     "Failed to get shared memory.\n");
+ 
+ 	size = resource_size(&res);
++	acpm->sram_size = size;
+ 	acpm->sram_base = devm_ioremap(dev, res.start, size);
+ 	if (!acpm->sram_base)
+ 		return dev_err_probe(dev, -ENOMEM,
+@@ -732,6 +754,7 @@ static int acpm_probe(struct platform_device *pdev)
+ 				     "Failed to get match data.\n");
+ 
+ 	acpm->shmem = acpm->sram_base + match_data->initdata_base;
++	acpm->pmic_sid_in_cmd1 = match_data->pmic_sid_in_cmd1;
+ 	acpm->dev = dev;
+ 
+ 	ret = acpm_channels_init(acpm);
+@@ -742,6 +765,11 @@ static int acpm_probe(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, acpm);
+ 
++	acpm_pmic_debugfs_init(&acpm->handle, dev);
++
++	if (!match_data->acpm_clk_dev_name)
++		return devm_of_platform_populate(dev);
++
+ 	acpm_clk_pdev = platform_device_register_data(dev,
+ 						match_data->acpm_clk_dev_name,
+ 						PLATFORM_DEVID_NONE, NULL, 0);
+@@ -881,11 +909,20 @@ static const struct acpm_match_data acpm_gs101 = {
+ 	.acpm_clk_dev_name = "gs101-acpm-clk",
+ };
+ 
++static const struct acpm_match_data acpm_exynos2200 = {
++	.initdata_base = ACPM_EXYNOS2200_INITDATA_BASE,
++	.pmic_sid_in_cmd1 = true,
++};
++
+ static const struct of_device_id acpm_match[] = {
+ 	{
+ 		.compatible = "google,gs101-acpm-ipc",
+ 		.data = &acpm_gs101,
+ 	},
++	{
++		.compatible = "samsung,exynos2200-acpm-ipc",
++		.data = &acpm_exynos2200,
++	},
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, acpm_match);
+diff --git a/drivers/firmware/samsung/exynos-acpm.h b/drivers/firmware/samsung/exynos-acpm.h
+index 708f6b010..31c46fc75 100644
+--- a/drivers/firmware/samsung/exynos-acpm.h
++++ b/drivers/firmware/samsung/exynos-acpm.h
+@@ -21,5 +21,6 @@ void acpm_set_xfer(struct acpm_xfer *xfer, u32 *cmd, size_t cmdcnt,
+ 		   unsigned int acpm_chan_id, bool response);
+ int acpm_do_xfer(struct acpm_handle *handle,
+ 		 const struct acpm_xfer *xfer);
++bool acpm_pmic_sid_in_cmd1(struct acpm_handle *handle);
+ 
+ #endif /* __EXYNOS_ACPM_H__ */
+diff --git a/drivers/mailbox/exynos-mailbox.c b/drivers/mailbox/exynos-mailbox.c
+index ff75c1c76..b28e6de40 100644
+--- a/drivers/mailbox/exynos-mailbox.c
++++ b/drivers/mailbox/exynos-mailbox.c
+@@ -136,6 +136,11 @@ static const struct of_device_id exynos_mbox_match[] = {
+ 		.compatible = "samsung,exynos850-mbox",
+ 		.data = &exynos850_mbox_data
+ 	},
++	{
++		/* exynos850 layout; the AP2APM mailbox clock is always on */
++		.compatible = "samsung,exynos2200-mbox",
++		.data = &exynos850_mbox_data
++	},
+ 	{},
+ };
+ MODULE_DEVICE_TABLE(of, exynos_mbox_match);
+@@ -169,7 +174,7 @@ static int exynos_mbox_probe(struct platform_device *pdev)
+ 	if (IS_ERR(exynos_mbox->regs))
+ 		return PTR_ERR(exynos_mbox->regs);
+ 
+-	pclk = devm_clk_get_enabled(dev, "pclk");
++	pclk = devm_clk_get_optional_enabled(dev, "pclk");
+ 	if (IS_ERR(pclk))
+ 		return dev_err_probe(dev, PTR_ERR(pclk),
+ 				     "Failed to enable clock.\n");
+-- 
+2.56.0
+
