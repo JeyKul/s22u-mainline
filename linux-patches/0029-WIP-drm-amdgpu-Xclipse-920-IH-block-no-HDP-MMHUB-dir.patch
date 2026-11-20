@@ -1,7 +1,7 @@
 From 9bdefeb713e7382c967989340283649db025d938 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 22:46:31 +0100
-Subject: [PATCH 29/30] WIP: drm/amdgpu: Xclipse 920 IH block, no HDP/MMHUB,
+Subject: [PATCH 29/31] WIP: drm/amdgpu: Xclipse 920 IH block, no HDP/MMHUB,
  direct fw load
 
 Device init completes with common + GMC + gIH (GC-internal IH ring).

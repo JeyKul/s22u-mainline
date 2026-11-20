@@ -1,5 +1,18 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: Mesa sees the GPU; first draw hangs the GFX ring (linux-patches/0031)
+- open() fixed: CPU page-table updates (vm_update_mode 3, as sgpu), PT BOs in GTT, VM entities get
+  the gfx scheduler; user BOs VRAM -> GTT (sgpu force_gtt); no IH_VMID LUT write (no OSSSYS);
+  xclk 2560 (25.6 MHz, sgpu); per-queue ring reset off (needs KIQ).
+- radv: "AMD Radeon Graphics (RADV VANGOGH)"; radeonsi via EGL surfaceless:
+  "AMD Radeon Graphics (radeonsi, vangogh, ACO, DRM 3.64, 7.3.0-b0s+)".
+- tools/gltri.c (GBM+GLES2 triangle into an FBO, readback to PPM): ring gfx timeout
+  (signaled 4, emitted 7), no VM fault. Draws (first shader execution) hang. GPU reset then fails
+  (RLC autoload timeout: firmware would need a new EL3 boot).
+- X: simpledrm, no glamor -> no DRI3; DRI_PRIME glxgears falls back to llvmpipe, vkcube needs DRI3.
+- Next: the 36 GC 10.4 register differences (SPI_CONFIG_CNTL*, VGT_*_RING_SIZE, ...) used by
+  gfx_v10_0 / radeonsi state, CSB clear-state contents, SH_MEM config; devcoredump of the hang.
+
 ## 2026-11-20: GFX RING + IB TESTS PASS on mainline amdgpu (linux-patches/0030)
 - `cat /sys/kernel/debug/dri/1/amdgpu_test_ib` -> "ib ring tests passed."; hw_init OK,
   "SE 1, SH per SE 1, CU per SH 6, active_cu_number 6".

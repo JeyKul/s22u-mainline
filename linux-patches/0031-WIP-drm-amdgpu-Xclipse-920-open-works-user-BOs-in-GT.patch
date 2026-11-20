@@ -1,0 +1,125 @@
+From 893b08b9cefcf068f625dbff7bceffc8ac9351ad Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 23:32:39 +0100
+Subject: [PATCH 31/31] WIP: drm/amdgpu: Xclipse 920: open() works, user BOs in
+ GTT, CPU VM updates
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c          |  8 ++++++++
+ drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c           |  4 ++++
+ drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c        |  3 ++-
+ drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c           | 12 +++++++++++-
+ drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c           |  4 ++++
+ drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c |  2 ++
+ 6 files changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+index afd8502a2..167b0648e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_gem.c
+@@ -186,6 +186,14 @@ int amdgpu_gem_object_create(struct amdgpu_device *adev, unsigned long size,
+ 	bp.preferred_domain = initial_domain;
+ 	bp.flags = flags;
+ 	bp.domain = initial_domain;
++	/* Xclipse 920: like sgpu (force_gtt), user buffers live in system RAM */
++	if (amdgpu_is_xclipse920(adev) && (bp.domain & AMDGPU_GEM_DOMAIN_VRAM)) {
++		bp.domain = (bp.domain & ~AMDGPU_GEM_DOMAIN_VRAM) | AMDGPU_GEM_DOMAIN_GTT;
++		bp.preferred_domain = bp.domain;
++		bp.flags &= ~(AMDGPU_GEM_CREATE_VRAM_CLEARED |
++			      AMDGPU_GEM_CREATE_VRAM_WIPE_ON_RELEASE |
++			      AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS);
++	}
+ 	bp.bo_ptr_size = sizeof(struct amdgpu_bo);
+ 	bp.xcp_id_plus1 = xcp_id_plus1;
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+index 4a63b472f..9ea7af9eb 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm.c
+@@ -2875,6 +2875,10 @@ void amdgpu_vm_manager_init(struct amdgpu_device *adev)
+ #else
+ 	adev->vm_manager.vm_update_mode = 0;
+ #endif
++	/* Xclipse 920: no SDMA, page tables are written by the CPU (as sgpu) */
++	if (amdgpu_is_xclipse920(adev))
++		adev->vm_manager.vm_update_mode = AMDGPU_VM_USE_CPU_FOR_GFX |
++						  AMDGPU_VM_USE_CPU_FOR_COMPUTE;
+ }
+ 
+ /**
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+index e43a60d09..fcd6e0a53 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_vm_pt.c
+@@ -450,7 +450,8 @@ int amdgpu_vm_pt_create(struct amdgpu_device *adev, struct amdgpu_vm *vm,
+ 	bp.size = amdgpu_vm_pt_size(adev, level);
+ 	bp.byte_align = AMDGPU_GPU_PAGE_SIZE;
+ 
+-	if (!adev->gmc.is_app_apu)
++	/* Xclipse 920: the page walker only reaches tables in system RAM */
++	if (!adev->gmc.is_app_apu && !amdgpu_is_xclipse920(adev))
+ 		bp.domain = AMDGPU_GEM_DOMAIN_VRAM;
+ 	else
+ 		bp.domain = AMDGPU_GEM_DOMAIN_GTT;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+index 0f8cd51fb..1cb125e40 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+@@ -4967,7 +4967,8 @@ static int gfx_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 		amdgpu_get_soft_full_reset_mask(&adev->gfx.gfx_ring[0]);
+ 	adev->gfx.compute_supported_reset =
+ 		amdgpu_get_soft_full_reset_mask(&adev->gfx.compute_ring[0]);
+-	if (!amdgpu_sriov_vf(adev) &&
++	/* per-queue reset goes through the KIQ, which the Xclipse 920 lacks */
++	if (!amdgpu_sriov_vf(adev) && !amdgpu_is_xclipse920(adev) &&
+ 	    !adev->debug_disable_gpu_ring_reset) {
+ 		adev->gfx.compute_supported_reset |= AMDGPU_RESET_TYPE_PER_QUEUE;
+ 		adev->gfx.gfx_supported_reset |= AMDGPU_RESET_TYPE_PER_QUEUE;
+@@ -5007,6 +5008,15 @@ static int gfx_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	gfx_v10_0_alloc_ip_dump(adev);
+ 
++	/*
++	 * Xclipse 920 has no SDMA: page tables are updated by the CPU, the VM
++	 * entities only need some scheduler to exist
++	 */
++	if (amdgpu_is_xclipse920(adev) && !adev->vm_manager.vm_pte_num_scheds) {
++		adev->vm_manager.vm_pte_scheds[0] = &adev->gfx.gfx_ring[0].sched;
++		adev->vm_manager.vm_pte_num_scheds = 1;
++	}
++
+ 	return 0;
+ }
+ 
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+index 73ee4a708..59bdcbdd6 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+@@ -414,6 +414,10 @@ static void gmc_v10_0_emit_pasid_mapping(struct amdgpu_ring *ring, unsigned int
+ 	struct amdgpu_device *adev = ring->adev;
+ 	uint32_t reg;
+ 
++	/* no OSSSYS IH on the Xclipse 920 (sgpu skips this too) */
++	if (amdgpu_is_xclipse920(adev))
++		return;
++
+ 	if (ring->vm_hub == AMDGPU_GFXHUB(0))
+ 		reg = SOC15_REG_OFFSET(OSSSYS, 0, mmIH_VMID_0_LUT) + vmid;
+ 	else
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+index 1c1d0e595..cbefc9797 100644
+--- a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+@@ -162,6 +162,8 @@ int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
+ 	xclipse920_nbio_funcs.get_rev_id = xclipse920_get_rev_id;
+ 	xclipse920_nbio_funcs.get_memsize = xclipse920_get_memsize;
+ 	adev->nbio.funcs = &xclipse920_nbio_funcs;
++	/* no VBIOS: 25.6 MHz reference clock (sgpu, nv_get_xclk) */
++	adev->clock.spll.reference_freq = 2560;
+ 	adev->nbio.hdp_flush_reg = &nbio_v2_3_hdp_flush_reg;
+ 	adev->hdp.funcs = &xclipse920_hdp_funcs;
+ 
+-- 
+2.56.0
+
