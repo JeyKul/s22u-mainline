@@ -1,5 +1,15 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU round 2, PATH 2: Samsung kernel from source, direct boot
+- ExtremeXT tree (ref/xt-kernel, branch b0s-direct): s5e9925_defconfig + b0s.config, WERROR off,
+  -Wno-error, bcmdhd -Werror dropped, DEBUG_FS on, CMUCAL_DEBUG off (=m breaks modpost).
+  B0S_DIRECT_DEBUG: head.S stops S-Boot's 60 s watchdog ("kernel_watchdog_start: Start Watchdog
+  60 sec" in S-Boot's log = /proc/last_kmsg in TWRP: likely what killed B1), DECON trigger, bands
+  0 red entry, 1 green page tables, 2 blue cpu_setup; kernel_init: 3 yellow + /proc/b0s_band.
+- src/xtinit: TWRP's modules.load.recovery order (sgpu at 107, softdog and 12 not-built modules
+  dropped), bands 4-7, dmesg + EL2 log to /data/root/xt-*.log, reboot to recovery. out/xt/boot-xt.img.
+- Boot 1: red, green, blue; no yellow: hangs between MMU on and kernel_init.
+
 ## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
 - src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
   build-twrp/Module.symvers; ioremap refuses 0x8ff00000: it is mapped RAM in TWRP's DT):
