@@ -8,7 +8,7 @@ TOP=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$TOP/out
 UL=$TOP/src/uniLoader
 KB=$TOP/src/build/arch/arm64/boot
-CMDLINE="console=tty0 fbcon=font:SUN12x22 loglevel=7 ignore_loglevel clk_ignore_unused pd_ignore_unused rdinit=/init panic=5 arm64.nomte arm64.nosve arm64.nompam screen_info_fb=0xf6200000,1440,3088 earlycon=efifb,wrap keep_bootcon ${1:-}"
+CMDLINE="console=tty0 fbcon=font:SUN12x22 loglevel=7 ignore_loglevel clk_ignore_unused pd_ignore_unused rdinit=/init panic=5 sysctl.kernel.panic_on_rcu_stall=1 softlockup_panic=1 arm64.nomte arm64.nosve arm64.nompam screen_info_fb=0xf6200000,1440,3088 earlycon=efifb,wrap keep_bootcon ${1:-}"
 
 mkdir -p "$OUT"
 cp "$KB/Image" "$UL/blob/Image"
