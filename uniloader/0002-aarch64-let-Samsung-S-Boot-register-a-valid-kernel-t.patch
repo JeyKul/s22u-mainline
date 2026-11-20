@@ -1,0 +1,86 @@
+From 82b5f54b14229d85eeaa5e4b7e12c2c04277c3d6 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 18:47:33 +0100
+Subject: [PATCH 2/2] aarch64: let Samsung S-Boot register a valid kernel text
+ range
+
+S-Boot reports [load address, header branch target) to the EL2 hypervisor
+as kernel text; a branch to +0x50 is rejected. With SBOOT_TEXT_INFO the
+header branches through a trampoline 2 MiB in.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/Kconfig          |  8 ++++++++
+ arch/aarch64/reloc.S  | 18 ++++++++++++++++--
+ configs/b0s_defconfig |  1 +
+ 3 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/arch/Kconfig b/arch/Kconfig
+index 4dc3e1c..f5e4c3f 100644
+--- a/arch/Kconfig
++++ b/arch/Kconfig
+@@ -10,4 +10,12 @@ menu "Architecture"
+ 		help
+ 		  Say Y if your want to appened a linux kernel image header to
+ 		  uniLoader.
++
++	config SBOOT_TEXT_INFO
++		bool "Make Samsung S-Boot register a valid kernel text range"
++		depends on LINUX_KRNL_HEADER_IMG && POSITION_INDEPENDENT
++		help
++		  Samsung S-Boot reports [load address, header branch target) to
++		  the EL2 hypervisor as kernel text and needs it to be at least
++		  64 KiB. Branch through a trampoline 2 MiB into the image.
+ endmenu
+diff --git a/arch/aarch64/reloc.S b/arch/aarch64/reloc.S
+index b6fb485..12c59cb 100644
+--- a/arch/aarch64/reloc.S
++++ b/arch/aarch64/reloc.S
+@@ -12,7 +12,9 @@
+ .extern _start
+ 
+ ENTRY_ALIAS(_head)
+-#ifdef CONFIG_LINUX_KRNL_HEADER_IMG
++#if defined(CONFIG_LINUX_KRNL_HEADER_IMG) && defined(CONFIG_SBOOT_TEXT_INFO)
++	linux_image_header _sboot_entry
++#elif defined(CONFIG_LINUX_KRNL_HEADER_IMG)
+ 	linux_image_header _reloc_entry
+ #else
+ 	adr	x1, _relocated_uni
+@@ -26,7 +28,8 @@ ENTRY_ALIAS(_rel_stack_size)
+ 	.quad _reloc_size
+ 
+ ENTRY_ALIAS( _reloc_entry)
+-	adr	x4, _start
++	adrp	x4, _start
++	add	x4, x4, #:lo12:_start
+ 	ldr	x5, _rel_stack_base
+ 	cmp	x4, x5
+ 	beq	_entry
+@@ -46,3 +49,14 @@ _dead: /* we should never get here */
+ 	b	_dead
+ 
+ ENTRY_ALIAS(_relocated_uni)
++
++#ifdef CONFIG_SBOOT_TEXT_INFO
++/*
++ * Samsung S-Boot registers [load address, target of the header branch) with
++ * the EL2 hypervisor as kernel text. EL2 aligns both ends to 64 KiB and the
++ * load address varies, so the header branches through a trampoline 2 MiB in.
++ */
++.balign 0x200000
++_sboot_entry:
++	b	_reloc_entry
++#endif
+diff --git a/configs/b0s_defconfig b/configs/b0s_defconfig
+index c77b1d7..b2517eb 100644
+--- a/configs/b0s_defconfig
++++ b/configs/b0s_defconfig
+@@ -6,3 +6,4 @@ CONFIG_TEXT_BASE=0x87000000
+ CONFIG_PAYLOAD_ENTRY=0xa8000000
+ CONFIG_RAMDISK_ENTRY=0xb0000000
+ CONFIG_LINUX_KRNL_HEADER_IMG=y
++CONFIG_SBOOT_TEXT_INFO=y
+-- 
+2.56.0
+
