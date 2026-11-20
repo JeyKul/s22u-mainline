@@ -1,0 +1,130 @@
+From 78ed8b6a36da12a0334fffee4703e418b1ea8454 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 21:35:04 +0100
+Subject: [PATCH 24/24] soc: samsung: exynos2200-g3d: request the G3D stage-2
+ AP before the RLC boot
+
+After a successful firmware verification, Samsung's imgloader asks EL2 to
+open the verified region to the GPU (HVC 0xc6000111, subsystem 7) before
+SMC 0x82000520 starts the RLC autoload. Without it the boot SMC never
+returns. Also: the firmware must be vendor_boot's signed
+sgpu/vangogh_lite_unified.bin, not the fallback blob compiled into sgpu.ko.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/samsung/exynos2200-g3d.c | 71 ++++++++++++++++++++++++----
+ 1 file changed, 62 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/soc/samsung/exynos2200-g3d.c b/drivers/soc/samsung/exynos2200-g3d.c
+index 7e63209e2..eda047e66 100644
+--- a/drivers/soc/samsung/exynos2200-g3d.c
++++ b/drivers/soc/samsung/exynos2200-g3d.c
+@@ -57,6 +57,7 @@
+ #define G3D_FW_NAME			"sgpu/vangogh_lite_unified.bin"
+ #define HVC_FID_VERIFY_SUBSYSTEM_FW	0xc6000110
+ #define S2MPU_SUBSYS_G3D_TMR		7	/* index in the stock subsystem-names */
++#define HVC_FID_REQUEST_FW_STAGE2_AP	0xc6000111
+ #define SMC_CMD_G3D_FW_BOOT		0x82000520
+ #define SMC_ALREADY_DONE		65538
+ 
+@@ -267,6 +268,15 @@ static int g3d_load_fw(struct exynos2200_g3d *g)
+ 		goto out;
+ 	}
+ 
++	/* let the GPU (and only it) at the verified region, as Samsung's imgloader does */
++	arm_smccc_hvc(HVC_FID_REQUEST_FW_STAGE2_AP, S2MPU_SUBSYS_G3D_TMR, 0, 0, 0,
++		      0, 0, 0, &res);
++	dev_info(g->dev, "fw stage2 ap: a0 %#lx\n", res.a0);
++	if (res.a0) {
++		ret = -EIO;
++		goto out;
++	}
++
+ 	arm_smccc_smc(SMC_CMD_G3D_FW_BOOT, 0, 0, 0, 0, 0, 0, 0, &res);
+ 	dev_info(g->dev, "fw boot: a0 %#lx\n", res.a0);
+ 	if (res.a0 && res.a0 != SMC_ALREADY_DONE) {
+@@ -441,6 +451,22 @@ static void __iomem *g3d_map(struct platform_device *pdev, const char *name)
+ 	       IOMEM_ERR_PTR(-ENOMEM);
+ }
+ 
++/* Samsung's own DT has no node for us: same addresses as our DT */
++#define G3D_STOCK_TZPC	0x16c10204
++static struct reserved_mem g3d_stock_fw_mem = {
++	.name = "sgpu_rmem",
++	.base = 0x8ff00000,
++	.size = 0xe0000,
++};
++static const struct resource g3d_stock_res[] = {
++	DEFINE_RES_MEM_NAMED(0x15860000, 0x10000, "pmu"),
++	DEFINE_RES_MEM_NAMED(0x16c30000, 0x2000, "cmu"),
++	DEFINE_RES_MEM_NAMED(0x16c60000, 0x1000, "dd"),
++	DEFINE_RES_MEM_NAMED(0x16c80000, 0x1000, "strmux"),
++	DEFINE_RES_MEM_NAMED(0x16cd0000, 0x1000, "pwrctl"),
++	DEFINE_RES_MEM_NAMED(0x16e00000, 0x100000, "gc"),
++};
++
+ static int exynos2200_g3d_probe(struct platform_device *pdev)
+ {
+ 	struct exynos2200_g3d *g;
+@@ -460,14 +486,19 @@ static int exynos2200_g3d_probe(struct platform_device *pdev)
+ 	    IS_ERR(g->strmux) || IS_ERR(g->pwrctl) || IS_ERR(g->gc))
+ 		return -ENOMEM;
+ 
+-	g->fw_mem = of_reserved_mem_lookup(of_parse_phandle(pdev->dev.of_node,
+-							    "memory-region", 0));
+-	if (!g->fw_mem)
+-		return -EINVAL;
+-
+-	if (of_property_read_u32(pdev->dev.of_node, "samsung,tzpc-addr",
+-				 &g->tz_addr))
+-		return -EINVAL;
++	if (!pdev->dev.of_node) {
++		/* booted on Samsung's DT (no uniLoader): stock sgpu_rmem/DTZPC */
++		g->fw_mem = &g3d_stock_fw_mem;
++		g->tz_addr = G3D_STOCK_TZPC;
++	} else {
++		g->fw_mem = of_reserved_mem_lookup(of_parse_phandle(pdev->dev.of_node,
++								    "memory-region", 0));
++		if (!g->fw_mem)
++			return -EINVAL;
++		if (of_property_read_u32(pdev->dev.of_node, "samsung,tzpc-addr",
++					 &g->tz_addr))
++			return -EINVAL;
++	}
+ 
+ 	/* handed to EL2 for good: allocate while memory is unfragmented */
+ 	g->el2_lv3 = alloc_pages_exact(EL2_LV3_TABLE_BUF_SIZE,
+@@ -501,7 +532,29 @@ static struct platform_driver exynos2200_g3d_driver = {
+ 	.probe = exynos2200_g3d_probe,
+ 	.remove = exynos2200_g3d_remove,
+ };
+-module_platform_driver(exynos2200_g3d_driver);
++static int __init exynos2200_g3d_init(void)
++{
++	struct device_node *np;
++	int ret;
++
++	ret = platform_driver_register(&exynos2200_g3d_driver);
++	if (ret)
++		return ret;
++
++	np = of_find_compatible_node(NULL, NULL, "samsung,exynos2200-g3d-power");
++	of_node_put(np);
++	if (!np && of_machine_is_compatible("samsung,s5e9925"))
++		platform_device_register_simple("exynos2200-g3d", -1, g3d_stock_res,
++						ARRAY_SIZE(g3d_stock_res));
++	return 0;
++}
++module_init(exynos2200_g3d_init);
++
++static void __exit exynos2200_g3d_exit(void)
++{
++	platform_driver_unregister(&exynos2200_g3d_driver);
++}
++module_exit(exynos2200_g3d_exit);
+ 
+ MODULE_DESCRIPTION("Exynos 2200 G3D power bring-up");
+ MODULE_LICENSE("GPL");
+-- 
+2.56.0
+

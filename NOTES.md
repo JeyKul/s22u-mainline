@@ -1,5 +1,12 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU FIRMWARE BOOTS ON MAINLINE (RLC autoload complete)
+- exynos2200-g3d: after verify, HVC 0xc6000111(7) REQUEST_FW_STAGE2_AP (from Samsung's trace), then
+  SMC 0x82000520 boot. Sequence (debugfs): s2mpufd, on, fw ->
+  fw verify 0, fw stage2 ap 0, fw boot 0, autoload: BOOTLOAD_STATUS 80000001 CP_STAT 00000000.
+- Needs vendor_boot's sgpu/vangogh_lite_unified.bin (sha256 0982b7ed...) in /usr/lib/firmware/sgpu.
+- Next: rings / IB test (the amdgpu-style part of sgpu), GPU DVFS, IFPO.
+
 ## 2026-11-20: G3D FIRMWARE VERIFIES ON MAINLINE: it was the firmware file
 - sgpu loads "sgpu/vangogh_lite_unified.bin" with request_firmware_into_buf() first; the blob compiled
   into sgpu.ko (unified_firmware_sign.h, what tools/extract-gpu-fw.py extracts) is only the fallback.
