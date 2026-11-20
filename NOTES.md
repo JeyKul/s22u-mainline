@@ -1,5 +1,20 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: TWRP bisect (args vs state)
+- Out-of-tree modules for TWRP's kernel (5.10.223-Lunarixus, clang-12 cross-DSO CFI): built in
+  src/build-twrp from the ExtremeXT tree + TWRP's /proc/config.gz, CRCs from TWRP's own modules,
+  -fsanitize=cfi -fsanitize-cfi-cross-dso -fsanitize-trap=cfi, readl -> inline ldr (no rwmmio
+  tracepoints in TWRP), and the struct module init reloc patched 0x188 -> 0x190.
+- Step 1 (src/twrp-g3dverify): hvc c6000110(7 8ff00000 dc000 e0000) = 0 in TWRP, EL2 "G3D_TMR ...
+  is verified!" + "Report ... to EL3_Monitor". No "Derive new hash": EL2 matched sgpu's cached hash
+  and skipped the EL3 signature SMC, so this proves the EL2 args/buffer only.
+- Step 3 (src/twrp-regdump, tools/hw/sss_regs.txt: CMU_SSP, CMU_STRONG, CMU_TOP SSP/STRONG, PD
+  status) diff TWRP vs mainline: CLK_CON_DIV_CLKCMU_SSP_NOC 0xf vs 0x2, GATE_CLKCMU_SSP_NOC
+  0x00200000 vs 0x00300000, pd_strong off vs on (+ dpub/dpuf/vts/g3d PDs, runtime only). Reading
+  CMU_STRONG with pd_strong off -> ITMON timeout (SSP_P) -> panic in TWRP.
+- Matched each in mainline (div 0xf, gate 0x00200000, STRONG off via STRONG_CONFIGURATION=0):
+  verify still 0x5106a. All CMU_SSP gates/QCH identical.
+
 ## 2026-11-20: GPU firmware verify: options 1 and 3 exhausted
 - Replayed every probe-time EL3 call of the pre-sgpu TWRP modules that could matter: CM init
   0xc2001031(1), SSS clock 0x82001011(SSS_CLK_ENABLE=0) (cpif wraps its CP signature checks in it),
