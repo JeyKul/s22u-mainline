@@ -1,0 +1,296 @@
+From 34477bffb0fae50987a610ebeee7d70f9e4c9c14 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 22:06:31 +0100
+Subject: [PATCH 28/28] WIP: drm/amdgpu: Xclipse 920 common + GMC blocks
+
+nbio_v2_3 funcs without the PCIe straps (rev_id 0, memsize = carve-out),
+no-op MMHUB (GFXHUB is the only VM hub), FB_LOCATION over a 127 MiB
+no-map carve-out at 0x88000000 plus the TMR, aperture = FB physical,
+LPDDR5 instead of a VBIOS lookup, VBIOS skipped, ASIC reset a no-op,
+no clock/power gating. Adds the DT carve-out.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts |  6 ++
+ drivers/gpu/drm/amd/amdgpu/amdgpu.h           |  7 ++
+ drivers/gpu/drm/amd/amdgpu/amdgpu_device.c    |  5 +-
+ drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c        | 17 +++-
+ drivers/gpu/drm/amd/amdgpu/nv.c               | 10 ++
+ .../gpu/drm/amd/amdgpu/xclipse920_reg_init.c  | 97 ++++++++++++++++++-
+ 6 files changed, 137 insertions(+), 5 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 5fdf57cfc..e75ffe128 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -103,6 +103,12 @@ sboot-kernel-text@80000000 {
+ 			no-map;
+ 		};
+ 
++		/* GPU "VRAM" carve-out (amdgpu, xclipse920_reg_init.c), below the TMR */
++		gpu-vram@88000000 {
++			reg = <0x0 0x88000000 0x0 0x7f00000>;
++			no-map;
++		};
++
+ 		sgpu_mem: sgpu@8ff00000 {
+ 			reg = <0x0 0x8ff00000 0x0 0xe0000>;
+ 			no-map;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu.h b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+index a9c6f5d4a..a2ea1ecf0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+@@ -1002,6 +1002,13 @@ static inline bool amdgpu_is_multi_aid(struct amdgpu_device *adev)
+ 	return !!adev->aid_mask;
+ }
+ 
++/* Samsung Xclipse 920 behind the Exynos 2200 PCI shim (xclipse920_reg_init.c) */
++extern const struct amdgpu_mmhub_funcs xclipse920_mmhub_funcs;
++static inline bool amdgpu_is_xclipse920(struct amdgpu_device *adev)
++{
++	return IS_ENABLED(CONFIG_PCI_EXYNOS2200_GPU) && adev->asic_type == CHIP_VANGOGH;
++}
++
+ int amdgpu_device_init(struct amdgpu_device *adev,
+ 		       uint32_t flags);
+ void amdgpu_device_fini_hw(struct amdgpu_device *adev);
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+index 9269e780f..1333dbc36 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_device.c
+@@ -939,6 +939,9 @@ u32 amdgpu_device_get_rev_id(struct amdgpu_device *adev)
+ 
+ static uint32_t amdgpu_device_get_vbios_flags(struct amdgpu_device *adev)
+ {
++	if (amdgpu_is_xclipse920(adev))
++		return AMDGPU_VBIOS_SKIP;
++
+ 	if (hweight32(adev->aid_mask) && (adev->flags & AMD_IS_APU))
+ 		return AMDGPU_VBIOS_SKIP;
+ 
+@@ -2173,7 +2176,7 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
+ 	if (amdgpu_is_multi_aid(adev))
+ 		amdgpu_uid_init(adev);
+ 	ip_block = amdgpu_device_ip_get_ip_block(adev, AMD_IP_BLOCK_TYPE_GFX);
+-	if (ip_block->status.valid != false)
++	if (ip_block && ip_block->status.valid != false)
+ 		amdgpu_amdkfd_device_probe(adev);
+ 
+ 	adev->cg_flags &= amdgpu_cg_mask;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+index c70657bc0..9974e69ae 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+@@ -578,6 +578,10 @@ static void gmc_v10_0_set_umc_funcs(struct amdgpu_device *adev)
+ 
+ static void gmc_v10_0_set_mmhub_funcs(struct amdgpu_device *adev)
+ {
++	if (amdgpu_is_xclipse920(adev)) {
++		adev->mmhub.funcs = &xclipse920_mmhub_funcs;	/* GFXHUB only */
++		return;
++	}
+ 	switch (amdgpu_ip_version(adev, MMHUB_HWIP, 0)) {
+ 	case IP_VERSION(2, 3, 0):
+ 	case IP_VERSION(2, 4, 0):
+@@ -693,6 +697,12 @@ static int gmc_v10_0_mc_init(struct amdgpu_device *adev)
+ 	adev->gmc.aper_base = pci_resource_start(adev->pdev, 0);
+ 	adev->gmc.aper_size = pci_resource_len(adev->pdev, 0);
+ 
++	/* the carve-out is plain DRAM: the CPU reaches it directly, no BAR0 */
++	if (amdgpu_is_xclipse920(adev)) {
++		adev->gmc.aper_base = adev->gfxhub.funcs->get_mc_fb_offset(adev);
++		adev->gmc.aper_size = adev->gmc.real_vram_size;
++	}
++
+ #ifdef CONFIG_X86_64
+ 	if ((adev->flags & AMD_IS_APU) && !amdgpu_passthrough(adev)) {
+ 		adev->gmc.aper_base = adev->gfxhub.funcs->get_mc_fb_offset(adev);
+@@ -758,6 +768,10 @@ static int gmc_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 	} else if (amdgpu_emu_mode == 1) {
+ 		adev->gmc.vram_type = AMDGPU_VRAM_TYPE_GDDR6;
+ 		adev->gmc.vram_width = 1 * 128; /* numchan * chansize */
++	} else if (amdgpu_is_xclipse920(adev)) {
++		/* no VBIOS: the carve-out is in the SoC's LPDDR5 */
++		adev->gmc.vram_type = AMDGPU_VRAM_TYPE_LPDDR5;
++		adev->gmc.vram_width = 64;
+ 	} else {
+ 		r = amdgpu_gmc_get_vram_info(adev,
+ 				&vram_width, &vram_type, &vram_vendor);
+@@ -800,7 +814,8 @@ static int gmc_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 	case IP_VERSION(10, 3, 3):
+ 	case IP_VERSION(10, 3, 7):
+ 		set_bit(AMDGPU_GFXHUB(0), adev->vmhubs_mask);
+-		set_bit(AMDGPU_MMHUB0(0), adev->vmhubs_mask);
++		if (!amdgpu_is_xclipse920(adev))
++			set_bit(AMDGPU_MMHUB0(0), adev->vmhubs_mask);
+ 		/*
+ 		 * To fulfill 4-level page support,
+ 		 * vm size is 256TB (48bit), maximum size of Navi10/Navi14/Navi12,
+diff --git a/drivers/gpu/drm/amd/amdgpu/nv.c b/drivers/gpu/drm/amd/amdgpu/nv.c
+index 96faaf8c5..800232906 100644
+--- a/drivers/gpu/drm/amd/amdgpu/nv.c
++++ b/drivers/gpu/drm/amd/amdgpu/nv.c
+@@ -461,6 +461,10 @@ static int nv_asic_reset(struct amdgpu_device *adev)
+ {
+ 	int ret = 0;
+ 
++	/* no PSP/SMU: nothing can reset the Xclipse 920 from here yet */
++	if (amdgpu_is_xclipse920(adev))
++		return 0;
++
+ 	switch (nv_asic_reset_method(adev)) {
+ 	case AMD_RESET_METHOD_PCI:
+ 		dev_info(adev->dev, "PCI reset\n");
+@@ -758,6 +762,12 @@ static int nv_common_early_init(struct amdgpu_ip_block *ip_block)
+ 			AMD_PG_SUPPORT_JPEG;
+ 		if (adev->apu_flags & AMD_APU_IS_VANGOGH)
+ 			adev->external_rev_id = adev->rev_id + 0x01;
++		if (amdgpu_is_xclipse920(adev)) {
++			/* no clock/power gating until it is understood */
++			adev->cg_flags = 0;
++			adev->pg_flags = 0;
++			adev->external_rev_id = 0x80;	/* Samsung's MGFX0 */
++		}
+ 		break;
+ 	case IP_VERSION(10, 3, 4):
+ 		adev->cg_flags = AMD_CG_SUPPORT_GFX_MGCG |
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+index 9b9023c81..c8ec33025 100644
+--- a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+@@ -1,25 +1,101 @@
+ // SPDX-License-Identifier: MIT
+ /*
+  * Samsung Xclipse 920 (Exynos 2200): an RDNA2 GC ("Van Gogh lite", GC 10.4)
+- * without IP discovery, VBIOS, VRAM, PSP or SMU, presented to amdgpu as
++ * without IP discovery, VBIOS, PSP, SMU or SDMA, presented to amdgpu as
+  * 1002:163F by drivers/pci/controller/pci-exynos2200-gpu.c.
+  *
+  * Register bases are Samsung's (vangogh_lite_ip_offset.h), in dwords from
+  * the GC window (BAR5). GC 10.4 matches GC 10.3.0's register map except
+  * for 36 registers (ring sizes, SPI config, SQ thread trace).
++ *
++ * Memory: like other APUs, "VRAM" is a carve-out of system DRAM, here
++ * 0x88000000 + 127 MiB (no-map in the DT). The FB aperture is 16 MiB
++ * aligned and extends to 0x8fffffff so that it also covers the TMR at
++ * 0x8ff00000 where EL3 verified and booted the RLC/CP firmware; the VRAM
++ * manager never gets that part. MC addresses equal physical ones.
+  */
+ #include "amdgpu.h"
+ #include "nv.h"
++#include "nbio_v2_3.h"
++#include "gmc_v10_0.h"
+ #include "soc15_common.h"
+ 
+ #include "gc/gc_10_3_0_offset.h"
+ 
++#define XCLIPSE920_FB_BASE	0x88000000ULL
++#define XCLIPSE920_FB_TOP	0x8fffffffULL	/* incl. TMR, 16 MiB granular */
++#define XCLIPSE920_VRAM_SIZE	(0x8ff00000ULL - XCLIPSE920_FB_BASE)
++
+ /* segment bases of instance 0; the other instances do not exist */
+ static const u32 xclipse920_gc_base[6] = { 0x00001260, 0x0000a000 };
+ static const u32 xclipse920_nbio_base[6] = { 0x00000000, 0x00000014, 0x00000d20,
+ 					     0x00010400, 0x0241b000 };
+ static const u32 xclipse920_none[6];
+ 
++/* NBIO: nbio_v2_3 minus the PCIe straps the Xclipse does not have */
++static struct amdgpu_nbio_funcs xclipse920_nbio_funcs;
++
++static u32 xclipse920_get_rev_id(struct amdgpu_device *adev)
++{
++	return 0;
++}
++
++static u32 xclipse920_get_memsize(struct amdgpu_device *adev)
++{
++	return XCLIPSE920_VRAM_SIZE >> 20;	/* MiB */
++}
++
++/* MMHUB: there is none, the GFX hub is the only VM hub */
++static u64 xclipse920_mmhub_get_fb_location(struct amdgpu_device *adev)
++{
++	return XCLIPSE920_FB_BASE;
++}
++
++static void xclipse920_mmhub_init(struct amdgpu_device *adev)
++{
++}
++
++static int xclipse920_mmhub_gart_enable(struct amdgpu_device *adev)
++{
++	return 0;
++}
++
++static void xclipse920_mmhub_set_fault_enable_default(struct amdgpu_device *adev,
++						      bool value)
++{
++}
++
++static void xclipse920_mmhub_gart_disable(struct amdgpu_device *adev)
++{
++}
++
++static int xclipse920_mmhub_set_clockgating(struct amdgpu_device *adev,
++					    enum amd_clockgating_state state)
++{
++	return 0;
++}
++
++static void xclipse920_mmhub_get_clockgating(struct amdgpu_device *adev, u64 *flags)
++{
++}
++
++static void xclipse920_mmhub_setup_vm_pt_regs(struct amdgpu_device *adev,
++					      u32 vmid, u64 page_table_base)
++{
++}
++
++const struct amdgpu_mmhub_funcs xclipse920_mmhub_funcs = {
++	.get_fb_location = xclipse920_mmhub_get_fb_location,
++	.get_mc_fb_offset = xclipse920_mmhub_get_fb_location,
++	.init = xclipse920_mmhub_init,
++	.gart_enable = xclipse920_mmhub_gart_enable,
++	.set_fault_enable_default = xclipse920_mmhub_set_fault_enable_default,
++	.gart_disable = xclipse920_mmhub_gart_disable,
++	.set_clockgating = xclipse920_mmhub_set_clockgating,
++	.get_clockgating = xclipse920_mmhub_get_clockgating,
++	.setup_vm_pt_regs = xclipse920_mmhub_setup_vm_pt_regs,
++};
++
+ int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
+ {
+ 	u32 i;
+@@ -30,12 +106,27 @@ int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
+ 		adev->reg_offset[NBIO_HWIP][i] = (u32 *)(i ? xclipse920_none : xclipse920_nbio_base);
+ 	}
+ 	adev->ip_versions[GC_HWIP][0] = IP_VERSION(10, 3, 1);
++	adev->ip_versions[NBIO_HWIP][0] = IP_VERSION(2, 3, 0);
++	/* not AMD_APU_IS_VANGOGH: none of Van Gogh's SMU/VCN quirks apply */
++	adev->family = AMDGPU_FAMILY_VGH;
+ 
+-	/* bring-up milestone: amdgpu's own accessors reach the GC */
+ 	dev_info(adev->dev, "Xclipse 920: GRBM_CHIP_REVISION %08x GRBM_STATUS %08x GB_ADDR_CONFIG %08x\n",
+ 		 RREG32_SOC15(GC, 0, mmGRBM_CHIP_REVISION),
+ 		 RREG32_SOC15(GC, 0, mmGRBM_STATUS),
+ 		 RREG32_SOC15(GC, 0, mmGB_ADDR_CONFIG));
+ 
+-	return -ENODEV;	/* IP blocks not wired up yet */
++	xclipse920_nbio_funcs = nbio_v2_3_funcs;
++	xclipse920_nbio_funcs.get_rev_id = xclipse920_get_rev_id;
++	xclipse920_nbio_funcs.get_memsize = xclipse920_get_memsize;
++	adev->nbio.funcs = &xclipse920_nbio_funcs;
++	adev->nbio.hdp_flush_reg = &nbio_v2_3_hdp_flush_reg;
++
++	/* FB aperture over the carve-out and the TMR, MC == physical */
++	WREG32_SOC15(GC, 0, mmGCMC_VM_FB_LOCATION_BASE, XCLIPSE920_FB_BASE >> 24);
++	WREG32_SOC15(GC, 0, mmGCMC_VM_FB_LOCATION_TOP, XCLIPSE920_FB_TOP >> 24);
++	WREG32_SOC15(GC, 0, mmGCMC_VM_FB_OFFSET, XCLIPSE920_FB_BASE >> 24);
++
++	amdgpu_device_ip_block_add(adev, &nv_common_ip_block);
++	amdgpu_device_ip_block_add(adev, &gmc_v10_0_ip_block);
++	return 0;
+ }
+-- 
+2.56.0
+

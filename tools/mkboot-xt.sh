@@ -46,7 +46,7 @@ for l in open(sys.argv[2]):
     add(l.strip())
 PY
 rm "$R/rd/xt-modules.list"
-aarch64-linux-gnu-gcc -static -O2 -Wall -o "$R/rd/init" "$TOP/src/xtinit/xtinit.c"
+aarch64-linux-gnu-gcc -static -O2 -Wall -o "$R/rd/init" "$TOP/tools/xtinit/xtinit.c"
 # LZ4 legacy like the vendor ramdisks S-Boot puts in front: the kernel's unlz4
 # reads a gzip stream after them as another LZ4 chunk and fails
 (cd "$R/rd" && find . | cpio -o -H newc --quiet | lz4 -l -12 --favor-decSpeed -f - "$R/ramdisk.cpio.lz4")
