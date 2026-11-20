@@ -1,5 +1,13 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU verify: not stale TWRP state; GPU parked
+- Test: no TWRP in the boot before. `poweroff` from mainline does not stay off with USB plugged in
+  (reboots straight into our boot.img), so this was mainline -> reset -> mainline (direct boot).
+- First calls after boot: el2 (lv3 table), s2mpufd, fw. G3D verify still 0x5106a, 37 us from
+  "Derive new hash" to "Fail to verify signature" (EL2 timestamps 41.443793 -> 41.443830).
+- => 0x5106a is not left over from the TWRP boot (at least across a warm reset). Hypothesis dead.
+  No full PMIC-off cold boot (USB unplugged) tested. GPU parked.
+
 ## 2026-11-20: S-Boot direct boot (no uniLoader) works; GPU verify unchanged
 - CONFIG_ARM64_B0S_DIRECT_BOOT (head.S preserve_boot_args: PMU nWDTRESET off, WTCON stop, DECON0
   TRIG 0x1281, x21 = built-in __b0s_dtb) + built-in initramfs; tools/mkboot-direct.sh (src/build-direct,
