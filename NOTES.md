@@ -1,5 +1,15 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: options 1 and 3 exhausted
+- Replayed every probe-time EL3 call of the pre-sgpu TWRP modules that could matter: CM init
+  0xc2001031(1), SSS clock 0x82001011(SSS_CLK_ENABLE=0) (cpif wraps its CP signature checks in it),
+  RNG 0x82001012, seclog 0x82000610(0xc3000000, 0x80000, hwirq 0x100) (EL3 log works but the CM
+  logs nothing for this). Others are fault/info reads (tzasc, ppmpu, iommu, dss SJTAG, chipid fuse,
+  seh callback, DRM secmem). Still 0x5106a, rejected in ~40 us.
+- pd_nocl1c (multimedia NoC) and most media PDs are off in our boot; STRONG, G3D, DPU, HSI0 on.
+- CryptoManagerV60 in sde (ldfw.img, header at 0x0, image 0x3dc50 at 0x150) is encrypted
+  (entropy 8.0); EL3 monitor not readable either. Static RE of the EL3 check is not possible.
+
 ## 2026-11-20: GPU firmware verify: ruled out more (still 0x5106a)
 - S-Boot kernel text info = [load addr, target of the header's first branch); uniLoader now branches
   through a trampoline 2 MiB in (SBOOT_TEXT_INFO), load addr varies (0x801f8000, 0x80128000...), DT
