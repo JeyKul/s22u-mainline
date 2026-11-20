@@ -1,0 +1,36 @@
+From b57a107c3cdc68a53e0a1c5cd1a1a4f5175b9c1c Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:40:55 +0100
+Subject: [PATCH 15/15] arm64: dts: exynos2200-b0s: DSIM takeover for panel
+ brightness
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index bb1184743..59f0784e1 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -274,6 +274,17 @@ ap2apm_mailbox: mailbox@15900000 {
+ 		#mbox-cells = <0>;
+ 	};
+ 
++	/* takes over the DSI link S-Boot left running; panel brightness */
++	dsi@19eb0000 {
++		compatible = "samsung,exynos2200-dsim";
++		reg = <0x19eb0000 0x300>,
++		      <0x19ee0100 0x700>,
++		      <0x19ee0000 0x100>,
++		      <0x19e21000 0x10>,
++		      <0x19f00000 0x1000>;
++		reg-names = "dsi", "dphy", "dphy-extra", "sys", "decon";
++	};
++
+ 	ufs_phy: phy@11104000 {
+ 		compatible = "samsung,exynos2200-ufs-phy";
+ 		reg = <0x11104000 0x4000>;
+-- 
+2.56.0
+

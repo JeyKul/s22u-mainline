@@ -1,22 +1,27 @@
-From 45714ff57927d007e19787f832eda7c55a432601 Mon Sep 17 00:00:00 2001
+From dad5b5b9c0ac12b7a3bdf498c9218613e0a760e5 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
-Date: Fri, 20 Nov 2026 14:37:33 +0100
-Subject: [PATCH 14/14] WIP: drm: exynos2200: DSIM bring-up test with Samsung's
- DSIM cal
+Date: Fri, 20 Nov 2026 14:40:55 +0100
+Subject: [PATCH 14/15] drm: exynos2200: DSIM takeover and panel backlight
 
-Samsung's GPL DSIM register layer (dsim_reg.c, regs-dsim.h, dsim_cal.h,
-cal_config.h, exynos_panel.h from the s5e9925 kernel) plus a debugfs
-test: re-initialise DSIM0 with the stock sequence (DECON trigger paused,
-panel untouched) and send DCS commands the stock way.
+Exynos 2200 DSIM driver that takes over the DSI link the bootloader
+left running (DECON0, command mode, DSC). With the bootloader's DSIM
+state no DCS command reaches the panel; after Samsung's re-init
+sequence (DECON's TE trigger paused, panel untouched) they do. The
+bootloader's TE protect/timeout window is kept.
 
-After the stock re-init the panel accepts commands (display off/on,
-brightness); with S-Boot's DSIM state it does not.
+The Galaxy S22 Ultra panel (S6E3HAE) brightness is exposed as a
+backlight (DCS 51h behind the level 1/2 keys, then a gamma update),
+normal range only. A debugfs file sends raw DCS commands.
+
+The register layer in cal/ is Samsung's GPL DSIM cal from the s5e9925
+kernel (dsim_reg.c, regs-dsim.h, dsim_cal.h, cal_config.h,
+exynos_panel.h).
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  drivers/gpu/drm/Kconfig                       |    2 +
  drivers/gpu/drm/Makefile                      |    1 +
- drivers/gpu/drm/exynos2200/Kconfig            |    6 +
+ drivers/gpu/drm/exynos2200/Kconfig            |    9 +
  drivers/gpu/drm/exynos2200/Makefile           |    4 +
  drivers/gpu/drm/exynos2200/cal/cal_config.h   |  142 +
  drivers/gpu/drm/exynos2200/cal/dsim_cal.h     |  233 ++
@@ -24,8 +29,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  .../gpu/drm/exynos2200/cal/exynos_drm_dsim.h  |    5 +
  drivers/gpu/drm/exynos2200/cal/exynos_panel.h |   89 +
  drivers/gpu/drm/exynos2200/cal/regs-dsim.h    |  819 +++++
- drivers/gpu/drm/exynos2200/dsim_test.c        |  213 ++
- 11 files changed, 4153 insertions(+)
+ drivers/gpu/drm/exynos2200/exynos2200_dsim.c  |  284 ++
+ 11 files changed, 4227 insertions(+)
  create mode 100644 drivers/gpu/drm/exynos2200/Kconfig
  create mode 100644 drivers/gpu/drm/exynos2200/Makefile
  create mode 100755 drivers/gpu/drm/exynos2200/cal/cal_config.h
@@ -34,7 +39,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  create mode 100644 drivers/gpu/drm/exynos2200/cal/exynos_drm_dsim.h
  create mode 100755 drivers/gpu/drm/exynos2200/cal/exynos_panel.h
  create mode 100755 drivers/gpu/drm/exynos2200/cal/regs-dsim.h
- create mode 100644 drivers/gpu/drm/exynos2200/dsim_test.c
+ create mode 100644 drivers/gpu/drm/exynos2200/exynos2200_dsim.c
 
 diff --git a/drivers/gpu/drm/Kconfig b/drivers/gpu/drm/Kconfig
 index 323422861..37bf98b0b 100644
@@ -63,26 +68,29 @@ index e635fcffd..195248049 100644
  obj-$(CONFIG_DRM_UDL) += udl/
 diff --git a/drivers/gpu/drm/exynos2200/Kconfig b/drivers/gpu/drm/exynos2200/Kconfig
 new file mode 100644
-index 000000000..006149592
+index 000000000..d06be0376
 --- /dev/null
 +++ b/drivers/gpu/drm/exynos2200/Kconfig
-@@ -0,0 +1,6 @@
-+config DRM_EXYNOS2200_DSIM_TEST
-+	bool "Exynos 2200 DSIM bring-up test (b0s)"
-+	depends on ARCH_EXYNOS
+@@ -0,0 +1,9 @@
++config DRM_EXYNOS2200_DSIM
++	tristate "Exynos 2200 DSIM takeover and panel backlight"
++	depends on ARCH_EXYNOS || COMPILE_TEST
++	select BACKLIGHT_CLASS_DEVICE
 +	help
-+	  debugfs interface to re-initialise DSIM0 and send DCS commands
-+	  during display bring-up. Not for normal use.
++	  Re-initialises the DSI link that the bootloader left running on
++	  Exynos 2200 (DECON0, command mode, DSC) so that the panel accepts
++	  commands, and exposes the panel brightness as a backlight. Used on
++	  the Samsung Galaxy S22 Ultra together with simpledrm.
 diff --git a/drivers/gpu/drm/exynos2200/Makefile b/drivers/gpu/drm/exynos2200/Makefile
 new file mode 100644
-index 000000000..7e3a3de94
+index 000000000..88f72dc65
 --- /dev/null
 +++ b/drivers/gpu/drm/exynos2200/Makefile
 @@ -0,0 +1,4 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +ccflags-y += -I$(src)/cal
-+obj-$(CONFIG_DRM_EXYNOS2200_DSIM_TEST) += b0s-dsim-test.o
-+b0s-dsim-test-y := cal/dsim_reg.o dsim_test.o
++obj-$(CONFIG_DRM_EXYNOS2200_DSIM) += exynos2200-dsim.o
++exynos2200-dsim-y := cal/dsim_reg.o exynos2200_dsim.o
 diff --git a/drivers/gpu/drm/exynos2200/cal/cal_config.h b/drivers/gpu/drm/exynos2200/cal/cal_config.h
 new file mode 100755
 index 000000000..df4cfa61e
@@ -4046,28 +4054,31 @@ index 000000000..d4456c028
 +#define DSIM_PHY_SKEWCAL_EN			(0x1 << 0)
 +
 +#endif /* _REGS_DSIM_H */
-diff --git a/drivers/gpu/drm/exynos2200/dsim_test.c b/drivers/gpu/drm/exynos2200/dsim_test.c
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_dsim.c b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
 new file mode 100644
-index 000000000..d910d515a
+index 000000000..59e77da8e
 --- /dev/null
-+++ b/drivers/gpu/drm/exynos2200/dsim_test.c
-@@ -0,0 +1,213 @@
++++ b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
+@@ -0,0 +1,284 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
-+ * Bring-up test for the Exynos 2200 DSIM on the Galaxy S22 Ultra:
-+ * re-initialise DSIM0 with Samsung's cal sequence (panel left alone),
-+ * then send DCS commands the way Samsung's driver does.
++ * Exynos 2200 DSIM: takes over the DSI link that the bootloader left running
++ * (DECON0 in command mode, DSC), re-initialises it with Samsung's register
++ * sequence so that DCS commands reach the panel, and exposes the panel
++ * brightness (Samsung S6E3HAE on the Galaxy S22 Ultra) as a backlight.
 + *
-+ *   echo 1 > /sys/kernel/debug/b0s-dsim-reinit    (stock DSIM re-init)
-+ *   echo "28" > /sys/kernel/debug/b0s-dsim        (DCS bytes in hex)
++ * The register layer (cal/) is Samsung's, from the s5e9925 kernel.
 + */
 +
++#include <linux/backlight.h>
 +#include <linux/debugfs.h>
 +#include <linux/delay.h>
 +#include <linux/io.h>
 +#include <linux/iopoll.h>
 +#include <linux/module.h>
-+#include <linux/slab.h>
++#include <linux/mutex.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
 +#include <linux/uaccess.h>
 +#include <video/mipi_display.h>
 +
@@ -4075,50 +4086,53 @@ index 000000000..d910d515a
 +#include <dsim_cal.h>
 +#include <regs-dsim.h>
 +
-+#define DECON0_BASE	0x19f00000
-+#define DECON_TRIG_CON	0x30
-+#define DSIM0_BASE	0x19eb0000
-+#define DPHY_BASE	0x19ee0100
-+#define DPHY_EXTRA_BASE	0x19ee0000
-+#define DPU_SYS_BASE	0x19e21000
++#define DECON_TRIG_CON		0x30
++#define DECON_HW_TRIG_EN	BIT(0)
 +
-+static void __iomem *decon, *dsim, *dphy, *dphy_extra, *dpu_sys;
-+static struct dentry *dbg, *dbg_reinit;
++/* S6E3HAE: normal brightness range of DCS 51h (HBM above is not exposed) */
++#define S6E3HAE_BRT_MIN		0x0008
++#define S6E3HAE_BRT_MAX		0x07ff
++
++struct exynos2200_dsim {
++	struct device *dev;
++	void __iomem *regs;
++	void __iomem *decon;
++	struct mutex lock;
++	struct backlight_device *bl;
++	struct dentry *dbg;
++};
 +
 +void dpu_print_hex_dump(void __iomem *regs, const void *buf, size_t len)
 +{
 +	print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 32, 4, buf, len, false);
 +}
 +
-+static void dump(const char *what)
-+{
-+	int i;
-+
-+	pr_info("b0s-dsim: --- %s ---\n", what);
-+	for (i = 0; i < 0x100; i += 16)
-+		pr_info("b0s-dsim: dsim+%03x: %08x %08x %08x %08x\n", i,
-+			readl(dsim + i), readl(dsim + i + 4),
-+			readl(dsim + i + 8), readl(dsim + i + 12));
-+	pr_info("b0s-dsim: TRIG_CON %08x MIPI_STATUS %08x\n",
-+		readl(decon + DECON_TRIG_CON), readl(dsim + DSIM_MIPI_STATUS));
-+}
-+
 +/* Samsung's dsim_write_data(), SFR path, command mode with burst commands */
-+static int b0s_dsim_write(u8 id, const u8 *buf, size_t len)
++static int exynos2200_dsim_write(struct exynos2200_dsim *dsim, const u8 *buf,
++				 size_t len)
 +{
 +	u32 fifo;
++	u8 id;
 +	int ret;
 +
++	if (!len || len > 64)
++		return -EINVAL;
++
++	mutex_lock(&dsim->lock);
 +	dsim_reg_clear_int(0, DSIM_INTSRC_SFR_PH_FIFO_EMPTY);
 +
-+	if (len <= 2) {
-+		dsim_reg_wr_tx_header(0, id, buf[0], len > 1 ? buf[1] : 0, false);
++	if (len == 1) {
++		id = MIPI_DSI_DCS_SHORT_WRITE;
++		dsim_reg_wr_tx_header(0, id, buf[0], 0, false);
++	} else if (len == 2) {
++		id = MIPI_DSI_DCS_SHORT_WRITE_PARAM;
++		dsim_reg_wr_tx_header(0, id, buf[0], buf[1], false);
 +	} else {
-+		size_t i;
++		size_t i, j;
 +
++		id = MIPI_DSI_DCS_LONG_WRITE;
 +		for (i = 0; i < len; i += 4) {
 +			u32 w = 0;
-+			size_t j;
 +
 +			for (j = 0; j < 4 && i + j < len; j++)
 +				w |= buf[i + j] << (8 * j);
@@ -4128,21 +4142,57 @@ index 000000000..d910d515a
 +	}
 +	dsim_reg_set_packetgo_ready(0);
 +
-+	ret = readl_poll_timeout(dsim + DSIM_FIFOCTRL, fifo,
++	ret = readl_poll_timeout(dsim->regs + DSIM_FIFOCTRL, fifo,
 +				 fifo & DSIM_FIFOCTRL_EMPTY_PH_SFR, 100, 100000);
-+	pr_info("b0s-dsim: tx %*ph -> %d (FIFOCTRL %08x INTSRC %08x CMD_STATUS %08x)\n",
-+		(int)len, buf, ret, fifo, readl(dsim + DSIM_INTSRC),
-+		readl(dsim + DSIM_CMD_STATUS));
++	mutex_unlock(&dsim->lock);
++
++	if (ret)
++		dev_err(dsim->dev, "DCS %*ph: timeout (FIFOCTRL %08x)\n",
++			(int)len, buf, fifo);
 +	return ret;
 +}
 +
-+static ssize_t b0s_dsim_dbg_write(struct file *f, const char __user *ubuf,
-+				  size_t count, loff_t *ppos)
++#define dsim_dcs(dsim, ...) ({						\
++	static const u8 __d[] = { __VA_ARGS__ };			\
++	exynos2200_dsim_write(dsim, __d, ARRAY_SIZE(__d));		\
++})
++
++static int s6e3hae_set_brightness(struct exynos2200_dsim *dsim, u16 level)
 +{
++	u8 wrdisbv[] = { MIPI_DCS_SET_DISPLAY_BRIGHTNESS, level >> 8, level & 0xff };
++	int ret;
++
++	ret = dsim_dcs(dsim, 0x9f, 0xa5, 0xa5);		/* level 1 key */
++	ret = ret ?: dsim_dcs(dsim, 0xf0, 0x5a, 0x5a);	/* level 2 key */
++	ret = ret ?: exynos2200_dsim_write(dsim, wrdisbv, sizeof(wrdisbv));
++	ret = ret ?: dsim_dcs(dsim, 0xf7, 0x0f);		/* gamma update */
++	ret = ret ?: dsim_dcs(dsim, 0xf0, 0xa5, 0xa5);
++	ret = ret ?: dsim_dcs(dsim, 0x9f, 0x5a, 0x5a);
++	return ret;
++}
++
++static int exynos2200_dsim_bl_update(struct backlight_device *bl)
++{
++	struct exynos2200_dsim *dsim = bl_get_data(bl);
++	int level = backlight_get_brightness(bl);
++
++	/* 0 (and blanking) goes to the dimmest level, not off */
++	return s6e3hae_set_brightness(dsim, S6E3HAE_BRT_MIN + level);
++}
++
++static const struct backlight_ops exynos2200_dsim_bl_ops = {
++	.options = BL_CORE_SUSPENDRESUME,
++	.update_status = exynos2200_dsim_bl_update,
++};
++
++static ssize_t exynos2200_dsim_dbg_write(struct file *f, const char __user *ubuf,
++					 size_t count, loff_t *ppos)
++{
++	struct exynos2200_dsim *dsim = file_inode(f)->i_private;
 +	char kbuf[256], *p, *tok;
 +	u8 data[64];
 +	size_t n = 0;
-+	u8 id;
++	int ret;
 +
 +	if (count >= sizeof(kbuf))
 +		return -EINVAL;
@@ -4157,38 +4207,21 @@ index 000000000..d910d515a
 +		if (kstrtou8(tok, 16, &data[n++]))
 +			return -EINVAL;
 +	}
-+	if (!n)
-+		return -EINVAL;
 +
-+	if (n == 1)
-+		id = MIPI_DSI_DCS_SHORT_WRITE;
-+	else if (n == 2)
-+		id = MIPI_DSI_DCS_SHORT_WRITE_PARAM;
-+	else
-+		id = MIPI_DSI_DCS_LONG_WRITE;
-+
-+	b0s_dsim_write(id, data, n);
-+	return count;
++	ret = exynos2200_dsim_write(dsim, data, n);
++	return ret ?: count;
 +}
 +
-+static const struct file_operations b0s_dsim_fops = {
-+	.write = b0s_dsim_dbg_write,
++static const struct file_operations exynos2200_dsim_dbg_fops = {
++	.open = simple_open,
++	.write = exynos2200_dsim_dbg_write,
 +};
 +
-+static void b0s_dsim_reinit(void);
-+
-+static ssize_t b0s_dsim_reinit_write(struct file *f, const char __user *ubuf,
-+				     size_t count, loff_t *ppos)
-+{
-+	b0s_dsim_reinit();
-+	return count;
-+}
-+
-+static const struct file_operations b0s_dsim_reinit_fops = {
-+	.write = b0s_dsim_reinit_write,
-+};
-+
-+static void b0s_dsim_reinit(void)
++/*
++ * Re-initialise DSIM0 the way Samsung's driver does. The panel is left
++ * alone: it keeps its state and image while DECON's TE trigger is paused.
++ */
++static void exynos2200_dsim_reinit(struct exynos2200_dsim *dsim)
 +{
 +	struct dsim_reg_config config = {
 +		.mode = DSIM_COMMAND_MODE,
@@ -4211,59 +4244,105 @@ index 000000000..d910d515a
 +		.burst_cmd_en = 1,
 +	};
 +	struct dsim_clks clks = { .hs_clk = 1362, .esc_clk = 20 };
-+	u32 trig = readl(decon + DECON_TRIG_CON);
++	u32 trig = readl(dsim->decon + DECON_TRIG_CON);
++	u32 te0 = readl(dsim->regs + DSIM_CMD_TE_CTRL0);
++	u32 te1 = readl(dsim->regs + DSIM_CMD_TE_CTRL1);
 +
-+	/* keep S-Boot's command-mode underrun reference */
-+	config.cmd_underrun_cnt = readl(dsim + DSIM_UNDERRUN_CTRL) & 0xffff;
++	config.cmd_underrun_cnt = readl(dsim->regs + DSIM_UNDERRUN_CTRL) & 0xffff;
 +
-+	writel(trig & ~BIT(0), decon + DECON_TRIG_CON);	/* pause TE trigger */
++	writel(trig & ~DECON_HW_TRIG_EN, dsim->decon + DECON_TRIG_CON);
 +	msleep(40);
 +
 +	dsim_reg_stop(0, DSIM_LANE_CLOCK | GENMASK(config.data_lane_cnt, 1));
 +	dsim_reg_init(0, &config, &clks, false);
 +	dsim_reg_start(0);
-+	dump("after stock init");
 +
-+	writel(trig, decon + DECON_TRIG_CON);
++	/* the bootloader's TE protect/timeout window, computed for this link */
++	writel(te0, dsim->regs + DSIM_CMD_TE_CTRL0);
++	writel(te1, dsim->regs + DSIM_CMD_TE_CTRL1);
++
++	writel(trig, dsim->decon + DECON_TRIG_CON);
 +}
 +
-+static int __init b0s_dsim_init(void)
++static int exynos2200_dsim_probe(struct platform_device *pdev)
 +{
-+	decon = ioremap(DECON0_BASE, 0x1000);
-+	dsim = ioremap(DSIM0_BASE, 0x1000);
-+	dphy = ioremap(DPHY_BASE, 0x700);
-+	dphy_extra = ioremap(DPHY_EXTRA_BASE, 0x100);
-+	dpu_sys = ioremap(DPU_SYS_BASE, 0x10);
-+	if (!decon || !dsim || !dphy || !dphy_extra || !dpu_sys)
++	struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.max_brightness = S6E3HAE_BRT_MAX - S6E3HAE_BRT_MIN,
++		.brightness = 0x300 - S6E3HAE_BRT_MIN,
++		.scale = BACKLIGHT_SCALE_NON_LINEAR,
++	};
++	struct device *dev = &pdev->dev;
++	struct exynos2200_dsim *dsim;
++	struct resource *res;
++	static const char * const names[] = { "dsi", "dphy", "dphy-extra", "sys" };
++	static const enum dsim_regs_type types[] = {
++		REGS_DSIM_DSI, REGS_DSIM_PHY, REGS_DSIM_PHY_BIAS, REGS_DSIM_SYS,
++	};
++	int i;
++
++	dsim = devm_kzalloc(dev, sizeof(*dsim), GFP_KERNEL);
++	if (!dsim)
++		return -ENOMEM;
++	dsim->dev = dev;
++	mutex_init(&dsim->lock);
++
++	for (i = 0; i < ARRAY_SIZE(names); i++) {
++		void __iomem *base = devm_platform_ioremap_resource_byname(pdev, names[i]);
++
++		if (IS_ERR(base))
++			return PTR_ERR(base);
++		dsim_regs_desc_init(base, names[i], types[i], 0);
++		if (!i)
++			dsim->regs = base;
++	}
++
++	/* DECON0 is shared with the display driver: map, don't claim */
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "decon");
++	if (!res)
++		return -EINVAL;
++	dsim->decon = devm_ioremap(dev, res->start, resource_size(res));
++	if (!dsim->decon)
 +		return -ENOMEM;
 +
-+	dsim_regs_desc_init(dsim, "dsi", REGS_DSIM_DSI, 0);
-+	dsim_regs_desc_init(dphy, "dphy", REGS_DSIM_PHY, 0);
-+	dsim_regs_desc_init(dphy_extra, "dphy-extra", REGS_DSIM_PHY_BIAS, 0);
-+	dsim_regs_desc_init(dpu_sys, "sys", REGS_DSIM_SYS, 0);
++	exynos2200_dsim_reinit(dsim);
 +
-+	dump("S-Boot state");
++	dsim->bl = devm_backlight_device_register(dev, "panel", dev, dsim,
++						  &exynos2200_dsim_bl_ops, &props);
++	if (IS_ERR(dsim->bl))
++		return PTR_ERR(dsim->bl);
++	backlight_update_status(dsim->bl);
 +
-+	dbg = debugfs_create_file("b0s-dsim", 0200, NULL, NULL, &b0s_dsim_fops);
-+	dbg_reinit = debugfs_create_file("b0s-dsim-reinit", 0200, NULL, NULL,
-+					 &b0s_dsim_reinit_fops);
++	dsim->dbg = debugfs_create_file("exynos2200-dsim-dcs", 0200, NULL, dsim,
++					&exynos2200_dsim_dbg_fops);
++	platform_set_drvdata(pdev, dsim);
 +	return 0;
 +}
 +
-+static void __exit b0s_dsim_exit(void)
++static void exynos2200_dsim_remove(struct platform_device *pdev)
 +{
-+	debugfs_remove(dbg_reinit);
-+	debugfs_remove(dbg);
-+	iounmap(dpu_sys);
-+	iounmap(dphy_extra);
-+	iounmap(dphy);
-+	iounmap(dsim);
-+	iounmap(decon);
++	struct exynos2200_dsim *dsim = platform_get_drvdata(pdev);
++
++	debugfs_remove(dsim->dbg);
 +}
 +
-+late_initcall(b0s_dsim_init);
-+module_exit(b0s_dsim_exit);
-+MODULE_DESCRIPTION("Exynos 2200 DSIM bring-up test (b0s)");
++static const struct of_device_id exynos2200_dsim_of_match[] = {
++	{ .compatible = "samsung,exynos2200-dsim" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, exynos2200_dsim_of_match);
++
++static struct platform_driver exynos2200_dsim_driver = {
++	.driver = {
++		.name = "exynos2200-dsim",
++		.of_match_table = exynos2200_dsim_of_match,
++	},
++	.probe = exynos2200_dsim_probe,
++	.remove = exynos2200_dsim_remove,
++};
++module_platform_driver(exynos2200_dsim_driver);
++
++MODULE_DESCRIPTION("Exynos 2200 DSIM takeover and panel backlight");
 +MODULE_LICENSE("GPL");
 -- 
 2.56.0

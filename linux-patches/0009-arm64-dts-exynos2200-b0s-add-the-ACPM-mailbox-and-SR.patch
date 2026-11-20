@@ -1,7 +1,7 @@
 From 986b3ee0dfb719866cc341ec99a6fcbf63f7ecbd Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:04:12 +0100
-Subject: [PATCH 09/14] arm64: dts: exynos2200-b0s: add the ACPM mailbox and
+Subject: [PATCH 09/15] arm64: dts: exynos2200-b0s: add the ACPM mailbox and
  SRAM
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

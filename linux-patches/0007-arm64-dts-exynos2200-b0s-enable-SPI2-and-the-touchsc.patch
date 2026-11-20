@@ -1,7 +1,7 @@
 From ecbe12986f25ffaa2b7b2f32a0f5cac3a4969a6e Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 13:58:55 +0100
-Subject: [PATCH 07/14] arm64: dts: exynos2200-b0s: enable SPI2 and the
+Subject: [PATCH 07/15] arm64: dts: exynos2200-b0s: enable SPI2 and the
  touchscreen
 
 USI02 in SPI mode (gs101-style 32-bit FIFO access, GPIO chip select on

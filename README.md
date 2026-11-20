@@ -39,8 +39,8 @@ minimum target: GPU, display, HDMI.
 
 | Hardware | State | Notes |
 |---|---|---|
-| **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | simpledrm on S-Boot's framebuffer works. Native: DECON (DPU) + DSIM DRM driver + panel driver, then 120 Hz |
-| Brightness | ⬜ | Panel DCS, needs the native driver |
+| **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | simpledrm on S-Boot's framebuffer; DSIM taken over (commands work). Next: DECON/DPP DRM driver (page flip, vblank), blanking, 120 Hz |
+| Brightness | ✅ | `/sys/class/backlight/panel` (0-2039, DCS 51h): DSIM re-initialised with Samsung's cal so commands reach the panel |
 | **Goal** GPU: Xclipse 920 (AMD RDNA2, gfx10.3 "Vangogh lite") | ⬜ | Samsung's `sgpu` is an amdgpu fork; plan: amdgpu with the Exynos glue (power domain, ACPM DVFS, firmware load via EL2), Mesa RADV/radeonsi. First blocker found on XNU: ACPM DVFS before the first G3D access |
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
 | Video decode/encode (MFC) | ⬜ | |
