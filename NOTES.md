@@ -1,5 +1,19 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-21: ROOT CAUSE of the draw hang: Xclipse 920 shaders are gfx11 (RDNA3) ISA
+- Samsung's stack calls the target gfx1040 ("VANGOGHLITE_EVT1:gfx1040" in vendor vulkan.samsung.so).
+- sgpu's trap handler for VANGOGH_LITE (cwsr_trap_m0_hex, source cwsr_trap_handler_m0.sp3) is
+  assembled with gfx11 encodings (s_branch 0xbfa0..., s_and_b32 0x8b...); the Navi14 one uses
+  gfx10 (0xbf82..., 0x87...). Registers/PM4 stay GC 10.3-like (36 offsets differ, see above).
+- Evidence on HW (tools/glcomp.c, radeonsi gfx10.3 ACO code): buffer_store_dword (MUBUF op 0x1c)
+  wrote 3 dwords = gfx11 buffer_store_b96; buffer_atomic_add (0x32) did nothing (gfx11 add = 0x35).
+  Draws: SPI/PA/GE busy, no waves alive (amdgpu_wave scan), EOP never comes.
+- Compute path itself works: dispatches complete, fences signal, CPU<->GPU memory coherent.
+- Plan: Mesa (src/mesa, 26.3): ACO emits gfx11 ISA for the Xclipse while radeonsi/radv keep gfx10.3
+  register programming. Open questions: SPI VGPR init (packed tid like gfx11?), PS input path
+  (gfx11 has no v_interp: lds_param_load), export semantics.
+- Vendor blobs for reference: ref/xclipse-blobs/ (local only, not committed).
+
 ## 2026-11-20: Mesa sees the GPU; first draw hangs the GFX ring (linux-patches/0031)
 - open() fixed: CPU page-table updates (vm_update_mode 3, as sgpu), PT BOs in GTT, VM entities get
   the gfx scheduler; user BOs VRAM -> GTT (sgpu force_gtt); no IH_VMID LUT write (no OSSSYS);
