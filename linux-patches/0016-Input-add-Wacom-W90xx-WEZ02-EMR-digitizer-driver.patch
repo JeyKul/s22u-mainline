@@ -1,0 +1,269 @@
+From 328e7d84e243ad4b60bd52d625d7a9d646b280be Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:48:30 +0100
+Subject: [PATCH 16/18] Input: add Wacom W90xx/WEZ02 EMR digitizer driver
+
+Pen digitizer of Samsung phones such as the Galaxy S22 Ultra (S Pen).
+A plain I2C read returns a 17-byte packet whose low nibble of byte 0 is
+the packet type; coordinate packets carry x/y, 12-bit pressure, hover
+height, tilt, eraser and side button. The query block (max x/y and
+pressure) follows the first 16 bytes of a 32-byte read. Protocol from
+Samsung's GPL wacom_i2c driver.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/Kconfig       |  10 ++
+ drivers/input/touchscreen/Makefile      |   1 +
+ drivers/input/touchscreen/wacom_w90xx.c | 207 ++++++++++++++++++++++++
+ 3 files changed, 218 insertions(+)
+ create mode 100644 drivers/input/touchscreen/wacom_w90xx.c
+
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 3e12043c2..751039c4d 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -598,6 +598,16 @@ config TOUCHSCREEN_WACOM_W8001
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called wacom_w8001.
+ 
++config TOUCHSCREEN_WACOM_W90XX
++	tristate "Wacom W90xx/WEZ02 EMR digitizer"
++	depends on I2C
++	help
++	  Say Y here for the Wacom W90xx/WEZ02 pen digitizer found in
++	  Samsung phones such as the Galaxy S22 Ultra (S Pen).
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called wacom_w90xx.
++
+ config TOUCHSCREEN_WACOM_I2C
+ 	tristate "Wacom Tablet support (I2C)"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index c8c3bdd90..c1a8bfb82 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -100,6 +100,7 @@ tsc2007-y := tsc2007_core.o
+ tsc2007-$(CONFIG_TOUCHSCREEN_TSC2007_IIO)	+= tsc2007_iio.o
+ obj-$(CONFIG_TOUCHSCREEN_TSC2007)	+= tsc2007.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_W8001)	+= wacom_w8001.o
++obj-$(CONFIG_TOUCHSCREEN_WACOM_W90XX)	+= wacom_w90xx.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_I2C)	+= wacom_i2c.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_W9000)	+= wacom_w9000.o
+ obj-$(CONFIG_TOUCHSCREEN_WDT87XX_I2C)	+= wdt87xx_i2c.o
+diff --git a/drivers/input/touchscreen/wacom_w90xx.c b/drivers/input/touchscreen/wacom_w90xx.c
+new file mode 100644
+index 000000000..177905e6e
+--- /dev/null
++++ b/drivers/input/touchscreen/wacom_w90xx.c
+@@ -0,0 +1,207 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Wacom W90xx / WEZ02 EMR digitizer (Samsung Galaxy S22 Ultra S Pen).
++ *
++ * Protocol from Samsung's GPL wacom_i2c driver: a plain I2C read returns a
++ * 16-byte packet (+1), the low nibble of byte 0 is the packet type; after
++ * the first 16 bytes of a 32-byte read follows the query block.
++ */
++
++#include <linux/bits.h>
++#include <linux/delay.h>
++#include <linux/i2c.h>
++#include <linux/input.h>
++#include <linux/input/touchscreen.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regulator/consumer.h>
++
++#define W90XX_PKT_LEN		17
++#define W90XX_QUERY_LEN		32
++#define W90XX_QUERY_POS		16
++
++#define W90XX_PKT_COORD		1
++
++#define W90XX_FLAG_RDY		BIT(7)
++#define W90XX_FLAG_ERASER	BIT(6)
++#define W90XX_FLAG_BUTTON	BIT(5)
++#define W90XX_FLAG_TOUCH	BIT(4)
++
++struct w90xx {
++	struct i2c_client *client;
++	struct input_dev *input;
++	struct touchscreen_properties prop;
++	struct regulator *avdd;
++	bool in_prox;
++	int tool;
++};
++
++static int w90xx_query(struct w90xx *w, u16 *max_x, u16 *max_y,
++		       u16 *max_p, u8 *max_tilt, u8 *max_h)
++{
++	u8 buf[W90XX_QUERY_LEN];
++	const u8 *q = buf + W90XX_QUERY_POS;
++	int i, ret;
++
++	for (i = 0; i < 3; i++) {
++		ret = i2c_master_recv(w->client, buf, sizeof(buf));
++		if (ret == sizeof(buf) && q[0] == 0x0f)
++			break;
++		msleep(50);
++	}
++	if (i == 3) {
++		dev_err(&w->client->dev, "no query answer (%d)\n", ret);
++		return ret < 0 ? ret : -EIO;
++	}
++
++	*max_x = (q[1] << 8) | q[2];
++	*max_y = (q[3] << 8) | q[4];
++	*max_p = (q[5] << 8) | q[6];
++	*max_tilt = q[11];
++	*max_h = q[13];
++	dev_info(&w->client->dev,
++		 "MPU %02x fw %02x%02x project %02x: %ux%u, pressure %u\n",
++		 q[9], q[7], q[8], q[15], *max_x, *max_y, *max_p);
++	return 0;
++}
++
++static void w90xx_report_coord(struct w90xx *w, const u8 *d)
++{
++	struct input_dev *input = w->input;
++	bool rdy = d[0] & W90XX_FLAG_RDY;
++	unsigned int x = (d[1] << 8) | d[2];
++	unsigned int y = (d[3] << 8) | d[4];
++	unsigned int p = ((d[5] & 0x0f) << 8) | d[6];
++
++	if (!rdy) {
++		/* pen left the hover range */
++		if (w->in_prox) {
++			input_report_key(input, BTN_TOUCH, 0);
++			input_report_key(input, BTN_STYLUS, 0);
++			input_report_abs(input, ABS_PRESSURE, 0);
++			input_report_key(input, w->tool, 0);
++			input_sync(input);
++			w->in_prox = false;
++		}
++		return;
++	}
++
++	w->tool = d[0] & W90XX_FLAG_ERASER ? BTN_TOOL_RUBBER : BTN_TOOL_PEN;
++	w->in_prox = true;
++
++	touchscreen_report_pos(input, &w->prop, x, y, false);
++	input_report_abs(input, ABS_PRESSURE, p);
++	input_report_abs(input, ABS_DISTANCE, d[7]);
++	input_report_abs(input, ABS_TILT_X, (s8)d[8]);
++	input_report_abs(input, ABS_TILT_Y, (s8)d[9]);
++	input_report_key(input, BTN_TOUCH, !!(d[0] & W90XX_FLAG_TOUCH));
++	input_report_key(input, BTN_STYLUS, !!(d[0] & W90XX_FLAG_BUTTON));
++	input_report_key(input, w->tool, 1);
++	input_sync(input);
++}
++
++static irqreturn_t w90xx_irq(int irq, void *data)
++{
++	struct w90xx *w = data;
++	u8 buf[W90XX_PKT_LEN];
++	int ret;
++
++	ret = i2c_master_recv(w->client, buf, sizeof(buf));
++	if (ret != sizeof(buf))
++		return IRQ_HANDLED;
++
++	if ((buf[0] & 0x0f) == W90XX_PKT_COORD)
++		w90xx_report_coord(w, buf);
++	else
++		dev_dbg(&w->client->dev, "packet %*ph\n", 16, buf);
++
++	return IRQ_HANDLED;
++}
++
++static void w90xx_power_off(void *data)
++{
++	struct w90xx *w = data;
++
++	regulator_disable(w->avdd);
++}
++
++static int w90xx_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	u16 max_x, max_y, max_p;
++	u8 max_tilt, max_h;
++	struct w90xx *w;
++	int ret;
++
++	w = devm_kzalloc(dev, sizeof(*w), GFP_KERNEL);
++	if (!w)
++		return -ENOMEM;
++	w->client = client;
++
++	w->avdd = devm_regulator_get(dev, "avdd");
++	if (IS_ERR(w->avdd))
++		return PTR_ERR(w->avdd);
++	ret = regulator_enable(w->avdd);
++	if (ret)
++		return ret;
++	ret = devm_add_action_or_reset(dev, w90xx_power_off, w);
++	if (ret)
++		return ret;
++	msleep(100);
++
++	ret = w90xx_query(w, &max_x, &max_y, &max_p, &max_tilt, &max_h);
++	if (ret)
++		return ret;
++
++	w->input = devm_input_allocate_device(dev);
++	if (!w->input)
++		return -ENOMEM;
++	w->input->name = "Wacom W90xx S Pen";
++	w->input->id.bustype = BUS_I2C;
++	__set_bit(INPUT_PROP_DIRECT, w->input->propbit);
++
++	input_set_abs_params(w->input, ABS_X, 0, max_x, 0, 0);
++	input_set_abs_params(w->input, ABS_Y, 0, max_y, 0, 0);
++	input_set_abs_params(w->input, ABS_PRESSURE, 0, max_p, 0, 0);
++	input_set_abs_params(w->input, ABS_DISTANCE, 0, max_h ?: 255, 0, 0);
++	input_set_abs_params(w->input, ABS_TILT_X, -(max_tilt ?: 63), max_tilt ?: 63, 0, 0);
++	input_set_abs_params(w->input, ABS_TILT_Y, -(max_tilt ?: 63), max_tilt ?: 63, 0, 0);
++	input_set_capability(w->input, EV_KEY, BTN_TOUCH);
++	input_set_capability(w->input, EV_KEY, BTN_STYLUS);
++	input_set_capability(w->input, EV_KEY, BTN_TOOL_PEN);
++	input_set_capability(w->input, EV_KEY, BTN_TOOL_RUBBER);
++	touchscreen_parse_properties(w->input, false, &w->prop);
++
++	ret = input_register_device(w->input);
++	if (ret)
++		return ret;
++
++	return devm_request_threaded_irq(dev, client->irq, NULL, w90xx_irq,
++					 IRQF_ONESHOT, "wacom-w90xx", w);
++}
++
++static const struct of_device_id w90xx_of_match[] = {
++	{ .compatible = "wacom,w90xx" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, w90xx_of_match);
++
++static const struct i2c_device_id w90xx_id[] = {
++	{ "w90xx" },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, w90xx_id);
++
++static struct i2c_driver w90xx_driver = {
++	.driver = {
++		.name = "wacom-w90xx",
++		.of_match_table = w90xx_of_match,
++	},
++	.probe = w90xx_probe,
++	.id_table = w90xx_id,
++};
++module_i2c_driver(w90xx_driver);
++
++MODULE_DESCRIPTION("Wacom W90xx/WEZ02 EMR digitizer");
++MODULE_LICENSE("GPL");
+-- 
+2.56.0
+

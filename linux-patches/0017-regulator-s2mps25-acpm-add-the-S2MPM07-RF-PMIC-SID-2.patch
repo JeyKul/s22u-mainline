@@ -1,0 +1,62 @@
+From 2820630ecb909b4360dcaff7e68a9a48f58a9387 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:48:30 +0100
+Subject: [PATCH 17/18] regulator: s2mps25-acpm: add the S2MPM07 (RF PMIC, SID
+ 2)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/regulator/s2mps25-acpm.c | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/regulator/s2mps25-acpm.c b/drivers/regulator/s2mps25-acpm.c
+index 71cfc00cc..428211a52 100644
+--- a/drivers/regulator/s2mps25-acpm.c
++++ b/drivers/regulator/s2mps25-acpm.c
+@@ -1,8 +1,8 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * Samsung S2MPS25 / S2MPS26 PMIC regulators, reached through the ACPM
+- * firmware (Exynos 2200). Register map from Samsung's GPL s2mps25/26
+- * drivers.
++ * Samsung S2MPS25 / S2MPS26 / S2MPM07 PMIC regulators, reached through the
++ * ACPM firmware (Exynos 2200). Register map from Samsung's GPL s2mps25/26
++ * and s2mpm07 drivers.
+  *
+  * Only regulators described in the device tree are registered: everything
+  * else stays as the bootloader and the APM firmware set it up.
+@@ -125,6 +125,14 @@ static const struct regulator_desc s2mps26_regulators[] = {
+ 	S2MPS_REG("bucksr1s", 300000, 6250, 0xb0, 0xff, 0xaf),
+ };
+ 
++static const struct regulator_desc s2mpm07_regulators[] = {
++	S2MPS_REG("ldo9r", 300000, 6250, 0x42, 0xff, 0x41),
++	S2MPS_REG("ldo11r", 1800000, 25000, 0x44, 0x3f, 0x44),
++	S2MPS_REG("ldo18r", 1800000, 25000, 0x4f, 0x3f, 0x4f),
++	S2MPS_REG("ldo19r", 1800000, 25000, 0x50, 0x3f, 0x50),
++	S2MPS_REG("buck1r", 300000, 6250, 0x20, 0xff, 0x1f),
++};
++
+ static int s2mps_acpm_reg_read(void *ctx, unsigned int reg, unsigned int *val)
+ {
+ 	struct s2mps_acpm *pmic = ctx;
+@@ -224,9 +232,16 @@ static const struct s2mps_acpm_data s2mps26_data = {
+ 	.sid = 1,
+ };
+ 
++static const struct s2mps_acpm_data s2mpm07_data = {
++	.descs = s2mpm07_regulators,
++	.num_descs = ARRAY_SIZE(s2mpm07_regulators),
++	.sid = 2,
++};
++
+ static const struct of_device_id s2mps_acpm_of_match[] = {
+ 	{ .compatible = "samsung,s2mps25-pmic", .data = &s2mps25_data },
+ 	{ .compatible = "samsung,s2mps26-pmic", .data = &s2mps26_data },
++	{ .compatible = "samsung,s2mpm07-pmic", .data = &s2mpm07_data },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, s2mps_acpm_of_match);
+-- 
+2.56.0
+

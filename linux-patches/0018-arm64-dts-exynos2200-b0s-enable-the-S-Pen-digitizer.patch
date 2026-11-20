@@ -1,0 +1,85 @@
+From 22b0961039fc9e7925792eff582cbc8ce9262db2 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:48:30 +0100
+Subject: [PATCH 18/18] arm64: dts: exynos2200-b0s: enable the S Pen digitizer
+
+Wacom WEZ02 on HSI2C20 (USI10), interrupt on gpa3-3, supply S2MPM07
+LDO11R (3.3 V, off after the bootloader). The sensor's x axis runs along
+the panel's long side, mirrored.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 43 +++++++++++++++++++
+ 1 file changed, 43 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 59f0784e1..e0def8f35 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -242,6 +242,18 @@ ldo28m: ldo28m {
+ 				};
+ 			};
+ 
++			pmic-rf {
++				compatible = "samsung,s2mpm07-pmic";
++
++				regulators {
++					ldo11r: ldo11r {
++						regulator-name = "wacom_avdd";
++						regulator-min-microvolt = <3300000>;
++						regulator-max-microvolt = <3300000>;
++					};
++				};
++			};
++
+ 			pmic-sub {
+ 				compatible = "samsung,s2mps26-pmic";
+ 
+@@ -328,6 +340,30 @@ spi2_cs: spi2-cs-pins {
+ 	};
+ };
+ 
++&usi10 {
++	samsung,mode = <USI_MODE_I2C>;
++	status = "okay";
++};
++
++&hsi2c_20 {
++	clock-frequency = <400000>;
++	status = "okay";
++
++	/* S Pen digitizer */
++	digitizer@56 {
++		compatible = "wacom,w90xx";
++		reg = <0x56>;
++		avdd-supply = <&ldo11r>;
++		/* sensor x runs along the panel's long axis, mirrored */
++		touchscreen-inverted-x;
++		touchscreen-swapped-x-y;
++		interrupt-parent = <&gpa3>;
++		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
++		pinctrl-0 = <&pen_irq>;
++		pinctrl-names = "default";
++	};
++};
++
+ &usi2 {
+ 	samsung,mode = <USI_MODE_SPI>;
+ 	status = "okay";
+@@ -387,6 +423,13 @@ &mct_peris {
+ };
+ 
+ &pinctrl_alive {
++	pen_irq: pen-irq-pins {
++		samsung,pins = "gpa3-3";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
++		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV1>;
++	};
++
+ 	touch_irq: touch-irq-pins {
+ 		samsung,pins = "gpa1-2";
+ 		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
+-- 
+2.56.0
+

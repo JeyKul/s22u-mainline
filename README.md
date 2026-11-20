@@ -24,7 +24,7 @@ minimum target: GPU, display, HDMI.
 | Rootfs on userdata | ✅ | Arch Linux ARM on f2fs (the whole 464 GB); userspace up in about 5 s |
 | Desktop | ✅ | XFCE on Xorg (simpledrm, software rendering), LightDM autologin, 2x scaling (`tools/install-desktop.sh`) |
 | ACPM (APM co-processor IPC) | ✅ | Mainline gs101 driver + Exynos 2200 variant (SRAM init data 0xf800, exynos850 mailbox, SPMI PMIC format) |
-| PMIC: S2MPS25/S2MPS26 regulators | 🟡 | New `s2mps25-acpm` driver, all 64 rails mapped; only DT-listed rails are registered (touch rails so far). Keys, RTC: not yet |
+| PMIC: S2MPS25/S2MPS26/S2MPM07 regulators | 🟡 | New `s2mps25-acpm` driver (SID 0/1/2); only DT-listed rails are registered (touch, S Pen). Keys, RTC: not yet |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
 | Thermal (TMU) | ⬜ | `exynos-acpm-tmu` |
 | Watchdog | ⬜ | uniLoader turns it off |
@@ -45,7 +45,7 @@ minimum target: GPU, display, HDMI.
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
 | Video decode/encode (MFC) | ⬜ | |
 | Touchscreen: STM FTS2BA61Y on SPI2 | ✅ | Multitouch (`stm-fts-spi`, new driver); rails from the PMIC. SPI needs `fifo-depth = <256>` (USI02) |
-| S Pen (Wacom) | ⬜ | |
+| S Pen (Wacom WEZ02) | ✅ | New `wacom_w90xx` driver: position, 4096 pressure levels, hover, tilt, eraser, side button; supply from the S2MPM07 |
 | Fingerprint (ultrasonic) | ⬜ | Probably TrustZone-only |
 
 ### USB, audio, connectivity
