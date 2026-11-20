@@ -16,12 +16,12 @@ minimum target: GPU, display, HDMI.
 
 | Hardware | State | Notes |
 |---|---|---|
-| Boot: S-Boot → uniLoader → Linux v7.3 | ✅ | initramfs in 0.3 s; kernel log on the panel from the first line |
+| Boot: S-Boot → uniLoader → Linux v7.3 | ✅ | Kernel 0.6 s, systemd 4.4 s; kernel log on the panel from the first line |
 | CPUs: 4x A510, 3x A710, 1x X2 | ✅ | 8/8 up (PSCI over smc). Needs `arm64.nomte arm64.nosve arm64.nompam` (EL2 traps them) |
 | CPU frequency (DVFS) | ⬜ | ACPM DVFS; mainline has `exynos-acpm-dvfs` (gs101) to adapt |
 | RAM | ✅ | 11 GB usable; all stock carve-outs kept out |
-| Storage: UFS 3.1 | 🟡 | Exynos 2200 UFS patches in; DT node and FMP setup next |
-| Rootfs on userdata | ⬜ | After UFS: Arch Linux ARM, the whole 463 GB |
+| Storage: UFS 3.1 | ✅ | HS-G4, 2 lanes; reads verified against the stock partitions |
+| Rootfs on userdata | ✅ | Arch Linux ARM on f2fs (the whole 464 GB); userspace up in about 5 s |
 | PMIC: S2MPS25/S2MPS26 (via ACPM) | ⬜ | Mainline `exynos-acpm` + `exynos-acpm-pmic` (gs101) to adapt. Unblocks regulators, power/vol-down keys, RTC |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
 | Thermal (TMU) | ⬜ | `exynos-acpm-tmu` |
@@ -50,7 +50,7 @@ minimum target: GPU, display, HDMI.
 
 | Hardware | State | Notes |
 |---|---|---|
-| USB gadget (serial, network) | ✅ | ACM shell works; NCM link up, needs a busybox with telnetd/udhcpd |
+| USB gadget (serial, network) | ✅ | Root shell on the ACM serial; SSH over NCM at 172.16.42.1 (PC gets .2 by DHCP) |
 | USB 3, USB host (OTG) | ⬜ | hacen's USBDP patches; role switch from MAX77705 |
 | Audio: CS35L41 speakers, ABOX DSP | ⬜ | |
 | Wi-Fi / BT: Broadcom BCM4389 (PCIe) | ⬜ | brcmfmac candidate |
@@ -64,7 +64,9 @@ S-Boot (unlocked) loads boot.img v4 (+ the stock vendor_boot)
      DECON trigger so the framebuffer reaches the panel
   -> copies Linux to 0xa8000000 and the initramfs to 0xb0000000, patches
      /chosen of OUR device tree, jumps (EL1; Samsung's hypervisor stays at EL2)
-  -> initramfs: USB gadget (ACM serial + NCM), Volume Up watcher
+  -> initramfs: USB gadget (ACM serial + NCM), Volume Up watcher, then
+     switch_root to Arch Linux ARM on userdata (f2fs); stays in the
+     initramfs shell if that fails or with `b0s.shell` on the cmdline
 ```
 
 S-Boot never sees our device tree, so its DTBO overlays don't apply to it.
@@ -82,7 +84,7 @@ the kernel log on the panel from the first line (patch 0004).
 
 | from | how |
 |---|---|
-| Linux shell | `twrp` (or `b0s-reboot recovery`) |
+| Linux shell | `twrp` (clean systemd reboot with the "recovery" reason) |
 | Linux, no shell | hold **Volume Up** 2 s |
 | anything hung | **Vol Down + Power** 7 s, then **Vol Up + Power** with USB plugged in |
 | to Android | flash your stock/Lineage `boot.img` from TWRP |
@@ -102,8 +104,13 @@ tools/build-kernel.sh     # Image + exynos2200-b0s.dtb
 initramfs/build.sh        # Alpine busybox-static + helpers
 tools/mkboot.sh           # -> out/boot.img
 tools/flash-boot.sh       # phone in TWRP: push, dd, verify sha256, reboot
-tools/sh.py 'dmesg'       # run a command over the USB serial shell
+tools/install-rootfs.sh --yes-erase-userdata   # TWRP: f2fs + Arch Linux ARM on userdata
 ```
+
+Then: `ssh root@172.16.42.1` (add your key first over the serial console,
+`screen /dev/ttyACM0`, which logs in as root; the Arch default users
+`alarm`/`alarm` and `root`/`root` also exist: change the passwords).
+`tools/sh.py 'cmd'` runs a command over the serial console.
 
 Back up first (from TWRP: at least `boot`, `vendor_boot`, `dtbo`, `efs`,
 `sec_efs`; keep EFS private, it holds your IMEI).
@@ -116,6 +123,7 @@ Back up first (from TWRP: at least `boot`, `vendor_boot`, `dtbo`, `efs`,
 | `uniloader/` | uniLoader patch: the b0s board |
 | `config/b0s.config` | config fragment on top of arm64 defconfig |
 | `initramfs/` | `init`, helpers (`b0s-reboot`, `b0s-volup`), build script |
+| `rootfs/overlay/` | files added to Arch: USB network, serial autologin, `twrp`, Vol Up watcher |
 | `tools/` | setup, build, pack, flash, shell |
 | `NOTES.md` | dated log of findings |
 

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Reboot to TWRP: clean systemd shutdown, "recovery" reaches PMU INFORM3
+if [ -d /run/systemd/system ]; then
+	exec systemctl reboot --reboot-argument=recovery
+fi
+exec /usr/local/bin/b0s-reboot recovery

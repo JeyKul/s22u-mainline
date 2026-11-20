@@ -16,6 +16,7 @@ Mainline Linux on the Galaxy S22 Ultra (SM-S908B, b0s, Exynos 2200). Public repo
 
 ## Build / flash / test
 - `tools/build-kernel.sh [config]`, `initramfs/build.sh`, `tools/mkboot.sh`, `tools/flash-boot.sh` (from TWRP).
-- Shell: `tools/sh.py 'cmd'` over /dev/ttyACM0. Back to TWRP: `tools/sh.py twrp` or Vol Up 2 s.
+- Shell: `ssh -F tools/ssh_config b0s` (Arch on userdata), or `tools/sh.py 'cmd'` over /dev/ttyACM0.
+  Back to TWRP: `twrp` or Vol Up 2 s. Kernel/boot changes: flash from TWRP, rootfs changes: scp.
 - Kernel tree src/linux (branch b0s on v7.3); commit there and re-export: `git format-patch v7.3 -o ../../linux-patches`.
 - uniLoader in src/uniLoader (branch b0s); export to uniloader/.

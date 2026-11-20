@@ -1,0 +1,9 @@
+[Unit]
+Description=Hold Volume Up 2 s to reboot to TWRP
+
+[Service]
+ExecStart=/usr/local/bin/b0s-volup-watch
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

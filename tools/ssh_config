@@ -1,0 +1,8 @@
+Host b0s
+	HostName 172.16.42.1
+	User root
+	IdentityFile ~/.ssh/b0s_claude
+	IdentitiesOnly yes
+	StrictHostKeyChecking accept-new
+	UserKnownHostsFile ~/.ssh/b0s_known_hosts
+	ConnectTimeout 5

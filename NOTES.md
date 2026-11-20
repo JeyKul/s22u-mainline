@@ -1,5 +1,15 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: UFS + Arch on userdata
+- UFS: hacen's PHY + host variant with the stock node layout (1-cell soc@0 regs!). HS-G4 L2, Samsung
+  KLUFG8RHGB-B0E1 512 GB; FMP descriptor type 3 via SMC (UFSPR_SECURE path) works. dtbo/vendor_boot/
+  vbmeta read back identical to the TWRP backups.
+- userdata wiped (old iOS root gone): f2fs (TWRP make_f2fs, label b0s-root), Arch Linux ARM
+  2026-07 tarball + rootfs/overlay. initramfs switch_roots by PARTNAME=userdata.
+- Boot: kernel 0.64 s + userspace 4.4 s, no failed units. SSH root@172.16.42.1 with ~/.ssh/b0s_claude
+  (tools/ssh_config). `twrp` = systemctl reboot --reboot-argument=recovery: tested from Arch.
+- PC has no passwordless sudo: no NAT for the phone yet (pacman needs internet).
+
 ## 2026-11-20: first boot
 - Boots to the initramfs: 8/8 CPUs, 11000 MiB, simpledrm, USB gadget (ACM + NCM) on 10b00000.usb.
   `twrp` -> TWRP in ~24 s (PMU INFORM3 0x80c = 0x12345674).
