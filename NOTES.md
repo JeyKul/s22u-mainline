@@ -6,7 +6,8 @@
 - First calls after boot: el2 (lv3 table), s2mpufd, fw. G3D verify still 0x5106a, 37 us from
   "Derive new hash" to "Fail to verify signature" (EL2 timestamps 41.443793 -> 41.443830).
 - => 0x5106a is not left over from the TWRP boot (at least across a warm reset). Hypothesis dead.
-  No full PMIC-off cold boot (USB unplugged) tested. GPU parked.
+- Battery pulled (true cold boot), then normal boot: el2, s2mpufd, fw -> still 0x5106a, same fast
+  reject. Cold boot ruled out too. GPU parked.
 
 ## 2026-11-20: S-Boot direct boot (no uniLoader) works; GPU verify unchanged
 - CONFIG_ARM64_B0S_DIRECT_BOOT (head.S preserve_boot_args: PMU nWDTRESET off, WTCON stop, DECON0
