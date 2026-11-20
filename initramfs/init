@@ -1,0 +1,89 @@
+#!/bin/busybox sh
+# b0s initramfs: shell over USB, and a way back to TWRP at any time.
+#   Hold Volume Up for 2 s          -> reboot to TWRP
+#   USB serial (ttyACM0 on the PC)  -> root shell
+#   USB network 172.16.42.1         -> telnet, no password
+#   `twrp` in the shell             -> reboot to TWRP
+/bin/busybox --install -s /bin
+export PATH=/bin:/sbin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run
+mount -t configfs configfs /sys/kernel/config
+mount -t debugfs debugfs /sys/kernel/debug
+mount -t pstore pstore /sys/fs/pstore 2>/dev/null
+
+exec >/dev/tty0 2>&1 </dev/null
+log() { echo "[b0s] $*"; echo "[b0s] $*" >/dev/kmsg; }
+
+log "initramfs on $(uname -r), $(grep -c ^processor /proc/cpuinfo) CPUs, $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo) MiB"
+log "hold Volume Up 2 s at any time to reboot to TWRP"
+
+# Vol Up watcher: 2 s held -> TWRP
+(
+	n=0
+	while :; do
+		if b0s-volup; then n=$((n + 1)); else n=0; fi
+		if [ $n -ge 4 ]; then
+			log "Volume Up held: rebooting to TWRP"
+			b0s-reboot recovery
+		fi
+		sleep 0.5
+	done
+) &
+
+# USB gadget: ACM serial + NCM network
+g=/sys/kernel/config/usb_gadget/b0s
+gadget_up() {
+	mkdir -p $g/strings/0x409 $g/configs/c.1/strings/0x409
+	echo 0x18d1 > $g/idVendor
+	echo 0xd001 > $g/idProduct
+	echo "mainline" > $g/strings/0x409/manufacturer
+	echo "Galaxy S22 Ultra (b0s)" > $g/strings/0x409/product
+	echo "b0s-mainline" > $g/strings/0x409/serialnumber
+	echo "acm+ncm" > $g/configs/c.1/strings/0x409/configuration
+	mkdir -p $g/functions/acm.usb0 $g/functions/ncm.usb0
+	ln -s $g/functions/acm.usb0 $g/configs/c.1/
+	ln -s $g/functions/ncm.usb0 $g/configs/c.1/
+	for i in $(seq 1 50); do
+		udc=$(ls /sys/class/udc 2>/dev/null | head -n1)
+		[ -n "$udc" ] && break
+		sleep 0.2
+	done
+	[ -n "$udc" ] || { log "no UDC: USB gadget unavailable"; return 1; }
+	echo "$udc" > $g/UDC && log "USB gadget on $udc"
+}
+
+if gadget_up; then
+	ifconfig usb0 172.16.42.1 netmask 255.255.255.0 up 2>/dev/null
+	cat > /tmp/udhcpd.conf <<EOF
+start 172.16.42.2
+end 172.16.42.2
+interface usb0
+option subnet 255.255.255.0
+lease_file /tmp/udhcpd.leases
+EOF
+	touch /tmp/udhcpd.leases
+	udhcpd /tmp/udhcpd.conf
+	telnetd -l /bin/sh
+	log "telnet 172.16.42.1 (USB network) or screen /dev/ttyACM0"
+	( while :; do setsid getty -n -l /bin/sh 115200 ttyGS0 vt100; sleep 1; done ) &
+fi
+
+cat > /bin/twrp <<'EOF'
+#!/bin/sh
+exec b0s-reboot recovery
+EOF
+chmod +x /bin/twrp
+
+dmesg > /tmp/dmesg.boot
+log "ready"
+
+# local console on the screen, for whenever input works
+while :; do
+	sleep 3600
+done

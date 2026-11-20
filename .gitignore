@@ -1,0 +1,10 @@
+# local only: device backups (EFS/IMEI!), live DT dumps (serials), sources, builds
+/backup/
+/ref/
+/src/
+/out/
+*.img
+*.dtb
+*.jpg
+*.png
+/logs/

@@ -1,0 +1,340 @@
+From 8d0510cb3cc60cb32a1cb2e6b293b832ae6d79ab Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 13:01:50 +0100
+Subject: [PATCH 3/4] arm64: dts: exynos: add Samsung Galaxy S22 Ultra (b0s)
+
+Based on exynos2200-g0s.dts. All eight memory banks, every fixed
+carve-out of the stock tree (EL2/EL3, S2MPU, TEEgris, modem, ...) as
+no-map, the 1440x3088 framebuffer S-Boot leaves running, and
+syscon-reboot-mode on PMU INFORM3 with Samsung's reset reasons, so
+'reboot recovery' lands in recovery like on stock.
+
+Unlike g0s, all eight CPUs come up (PSCI over smc).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/Makefile           |   1 +
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 299 ++++++++++++++++++
+ 2 files changed, 300 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+
+diff --git a/arch/arm64/boot/dts/exynos/Makefile b/arch/arm64/boot/dts/exynos/Makefile
+index 8c48ce2e0..ac78f45a3 100644
+--- a/arch/arm64/boot/dts/exynos/Makefile
++++ b/arch/arm64/boot/dts/exynos/Makefile
+@@ -3,6 +3,7 @@ subdir-y += axis
+ subdir-y += google
+ 
+ dtb-$(CONFIG_ARCH_EXYNOS) += \
++	exynos2200-b0s.dtb		\
+ 	exynos2200-g0s.dtb		\
+ 	exynos5433-tm2.dtb		\
+ 	exynos5433-tm2e.dtb		\
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+new file mode 100644
+index 000000000..ae9376363
+--- /dev/null
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -0,0 +1,299 @@
++// SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
++/*
++ * Samsung Galaxy S22 Ultra (b0s/SM-S908B) device tree source
++ *
++ * Based on exynos2200-g0s.dts by Ivaylo Ivanov. Board values come from the
++ * live device tree of an SM-S908B (S908BXXUDFYD9 bootloader).
++ *
++ * Booted through uniLoader: S-Boot never sees this tree, so none of its
++ * overlay requirements apply.
++ */
++
++/dts-v1/;
++#include "exynos2200.dtsi"
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	model = "Samsung Galaxy S22 Ultra (SM-S908B)";
++	compatible = "samsung,b0s", "samsung,exynos2200";
++	chassis-type = "handset";
++
++	chosen {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		/* S-Boot leaves DECON0 scanning this buffer */
++		framebuffer: framebuffer {
++			compatible = "simple-framebuffer";
++			memory-region = <&cont_splash_mem>;
++			width = <1440>;
++			height = <3088>;
++			stride = <(1440 * 4)>;
++			format = "a8r8g8b8";
++		};
++	};
++
++	/*
++	 * RTC clock (XrtcXTI); external, must be 32.768 kHz.
++	 *
++	 * TODO: Remove this once RTC clock is implemented properly as part of
++	 *       PMIC driver.
++	 */
++	rtcclk: clock-rtcclk {
++		compatible = "fixed-clock";
++		clock-output-names = "rtcclk";
++		#clock-cells = <0>;
++		clock-frequency = <32768>;
++	};
++
++	/* Power and Volume Down are PMIC keys (s2mps25), not wired here yet */
++	gpio-keys {
++		compatible = "gpio-keys";
++
++		pinctrl-0 = <&key_volup>;
++		pinctrl-names = "default";
++
++		volup-key {
++			label = "Volume Up";
++			linux,code = <KEY_VOLUMEUP>;
++			gpios = <&gpa3 0 GPIO_ACTIVE_LOW>;
++			wakeup-source;
++		};
++	};
++
++	/* 12 GiB, banks as S-Boot reports them */
++	memory@80000000 {
++		device_type = "memory";
++		reg = <0x0 0x80000000 0x0 0x36c00000>,
++		      <0x0 0xc1400000 0x0 0x1ec00000>,
++		      <0x0 0xe1300000 0x0 0x1ed00000>,
++		      <0x8 0x80000000 0x0 0x80000000>,
++		      <0x9 0x00000000 0x0 0x80000000>,
++		      <0x9 0x80000000 0x0 0x80000000>,
++		      <0xa 0x00000000 0x0 0x80000000>,
++		      <0xa 0x80000000 0x0 0x80000000>;
++	};
++
++	/* TODO: Remove this once PMIC is implemented  */
++	reg_dummy: regulator-0 {
++		compatible = "regulator-fixed";
++		regulator-name = "dummy_reg";
++	};
++
++	/*
++	 * Every fixed carve-out of the stock tree is kept out of the linear
++	 * map: several belong to EL2/EL3/TEEgris and are protected by S2MPU,
++	 * so even a speculative access could fault.
++	 */
++	reserved-memory {
++		#address-cells = <2>;
++		#size-cells = <2>;
++		ranges;
++
++		sgpu_mem: sgpu@8ff00000 {
++			reg = <0x0 0x8ff00000 0x0 0xe0000>;
++			no-map;
++		};
++
++		kaslr@8ffff000 {
++			reg = <0x0 0x8ffff000 0x0 0x1000>;
++			no-map;
++		};
++
++		ect@90000000 {
++			reg = <0x0 0x90000000 0x0 0x3a000>;
++			no-map;
++		};
++
++		sec-debug-next@91200000 {
++			reg = <0x0 0x91200000 0x0 0x200000>;
++			no-map;
++		};
++
++		secure-camera@96000000 {
++			reg = <0x0 0x96000000 0x0 0x1ee0000>;
++			no-map;
++		};
++
++		el3mon@bff80000 {
++			reg = <0x0 0xbff80000 0x0 0x80000>;
++			no-map;
++		};
++
++		el2-code@c1400000 {
++			reg = <0x0 0xc1400000 0x0 0x200000>;
++			no-map;
++		};
++
++		s2mpu-table@c1800000 {
++			reg = <0x0 0xc1800000 0x0 0x600000>;
++			no-map;
++		};
++
++		seclog@c3000000 {
++			reg = <0x0 0xc3000000 0x0 0x80000>;
++			no-map;
++		};
++
++		wifi-msi@e7200000 {
++			reg = <0x0 0xe7200000 0x0 0x1000>;
++			no-map;
++		};
++
++		teegris@ed310000 {
++			reg = <0x0 0xed310000 0x0 0x2000>;
++			no-map;
++		};
++
++		cont_splash_mem: framebuffer@f6200000 {
++			reg = <0x0 0xf6200000 0x0 (1440 * 3088 * 4)>;
++			no-map;
++		};
++
++		log-bcm@fbc00000 {
++			reg = <0x0 0xfbc00000 0x0 0x400000>;
++			no-map;
++		};
++
++		log-ppc@fc800000 {
++			reg = <0x0 0xfc800000 0x0 0x100000>;
++			no-map;
++		};
++
++		debug_kinfo_reserved: debug-kinfo-reserved@fcfff000 {
++			reg = <0x0 0xfcfff000 0x0 0x1000>;
++			no-map;
++		};
++
++		debug-snapshot@fd000000 {
++			reg = <0x0 0xfd000000 0x0 0x10000>;
++			no-map;
++		};
++
++		log_itmon: log-itmon@fffe0000 {
++			reg = <0x0 0xfffe0000 0x0 0x20000>;
++			no-map;
++		};
++
++		cp@880000000 {
++			reg = <0x8 0x80000000 0x0 0xd800000>;
++			no-map;
++		};
++
++		abox@88d800000 {
++			reg = <0x8 0x8d800000 0x0 0x2800000>;
++			no-map;
++		};
++
++		cp1@890000000 {
++			reg = <0x8 0x90000000 0x0 0xe000000>;
++			no-map;
++		};
++
++		gnss@8a1600000 {
++			reg = <0x8 0xa1600000 0x0 0x600000>;
++			no-map;
++		};
++
++		dnc-fw@8a1c00000 {
++			reg = <0x8 0xa1c00000 0x0 0x500000>;
++			no-map;
++		};
++
++		mfc-fw@8a2400000 {
++			reg = <0x8 0xa2400000 0x0 0x800000>;
++			no-map;
++		};
++
++		sec-rdx-bootdev@8b0000000 {
++			reg = <0x8 0xb0000000 0x0 0xb600000>;
++			no-map;
++		};
++
++		el2-earlymem@afe600000 {
++			reg = <0xa 0xfe600000 0x0 0x1a00000>;
++			no-map;
++		};
++	};
++};
++
++&cmu_hsi0 {
++	clocks = <&xtcxo>,
++		 <&rtcclk>,
++		 <&cmu_top CLK_DOUT_CMU_HSI0_NOC>,
++		 <&cmu_top CLK_DOUT_CMU_HSI0_DPGTC>,
++		 <&cmu_top CLK_DOUT_CMU_HSI0_DPOSC>,
++		 <&cmu_top CLK_DOUT_CMU_HSI0_USB32DRD>;
++	clock-names = "oscclk", "rtcclk", "noc", "dpgtc", "dposc", "usb";
++};
++
++&ext_26m {
++	clock-frequency = <26000000>;
++};
++
++&ext_200m {
++	clock-frequency = <200000000>;
++};
++
++&mct_peris {
++	status = "okay";
++};
++
++&pinctrl_alive {
++	key_volup: key-volup-pins {
++		samsung,pins = "gpa3-0";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_F>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_UP>;
++		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV4>;
++	};
++};
++
++&pmu_system_controller {
++	/* Reset reasons S-Boot reads from PMU INFORM3 (stock sec_reboot) */
++	reboot-mode {
++		compatible = "syscon-reboot-mode";
++		offset = <0x80c>;
++		mode-normal = <0x12345670>;
++		mode-download = <0x12345671>;
++		mode-recovery = <0x12345674>;
++		mode-bootloader = <0x1234567d>;
++	};
++};
++
++&ppi_cluster0 {
++	affinity = <&cpu0 &cpu1>;
++};
++
++&usb {
++	/* TODO: Replace these once PMIC is implemented  */
++	vdd10-supply = <&reg_dummy>;
++	vdd33-supply = <&reg_dummy>;
++
++	status = "okay";
++};
++
++&usb32drd {
++	status = "okay";
++};
++
++&usb_dwc3 {
++	dr_mode = "otg";
++	usb-role-switch;
++	role-switch-default-mode = "peripheral";
++	maximum-speed = "high-speed";
++};
++
++&usb_hsphy {
++	/* TODO: Replace these once PMIC is implemented  */
++	vdda12-supply = <&reg_dummy>;
++	vdd-supply = <&reg_dummy>;
++
++	status = "okay";
++};
++
++&xtcxo {
++	clock-frequency = <76800000>;
++};
+-- 
+2.56.0
+

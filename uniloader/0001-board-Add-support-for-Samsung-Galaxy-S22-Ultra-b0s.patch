@@ -1,0 +1,183 @@
+From 30f54936fa03251a04784e8a9b730215210c35f3 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 13:05:44 +0100
+Subject: [PATCH] board: Add support for Samsung Galaxy S22 Ultra (b0s)
+
+The g0s board with the 1440x3088 panel; kernel and ramdisk are placed
+in the clean RAM gap at 0xa8000000/0xb0000000, clear of the stock
+carve-outs. Carries a Linux Image header like the stock boot image.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ board/Kconfig             |   7 +++
+ board/Makefile            |   1 +
+ board/samsung/board-b0s.c | 111 ++++++++++++++++++++++++++++++++++++++
+ configs/b0s_defconfig     |   8 +++
+ 4 files changed, 127 insertions(+)
+ create mode 100644 board/samsung/board-b0s.c
+ create mode 100644 configs/b0s_defconfig
+
+diff --git a/board/Kconfig b/board/Kconfig
+index bb4242b..fc20b9e 100644
+--- a/board/Kconfig
++++ b/board/Kconfig
+@@ -268,6 +268,13 @@ menu "Device Support"
+ 		help
+ 		  Say Y if you want to include support for Samsung Galaxy S8
+ 
++	config SAMSUNG_B0S
++		bool "Support for Samsung Galaxy S22 Ultra"
++		default n
++		depends on EXYNOS_2200
++		help
++		  Say Y if you want to include support for Samsung Galaxy S22 Ultra
++
+ 	config SAMSUNG_G0S
+ 		bool "Support for Samsung Galaxy S22+"
+ 		default n
+diff --git a/board/Makefile b/board/Makefile
+index 8bb0b7b..96a6c58 100644
+--- a/board/Makefile
++++ b/board/Makefile
+@@ -36,6 +36,7 @@ lib-$(CONFIG_SAMSUNG_A71) += samsung/board-a71.o
+ lib-$(CONFIG_SAMSUNG_BEYOND1LTE) += samsung/board-beyond1lte.o
+ lib-$(CONFIG_SAMSUNG_C1S) += samsung/board-c1s.o
+ lib-$(CONFIG_SAMSUNG_DREAMLTE) += samsung/board-dreamlte.o
++lib-$(CONFIG_SAMSUNG_B0S) += samsung/board-b0s.o
+ lib-$(CONFIG_SAMSUNG_G0S) += samsung/board-g0s.o
+ lib-$(CONFIG_SAMSUNG_GTA3XL) += samsung/board-gta3xl.o
+ lib-$(CONFIG_SAMSUNG_GTA4XL) += samsung/board-gta4xl.o
+diff --git a/board/samsung/board-b0s.c b/board/samsung/board-b0s.c
+new file mode 100644
+index 0000000..db79443
+--- /dev/null
++++ b/board/samsung/board-b0s.c
+@@ -0,0 +1,111 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Copyright (c) 2025, Ivaylo Ivanov <ivo.ivanov.ivanov1@gmail.com>
++ *
++ * Galaxy S22 Ultra (b0s): the g0s board with the 1440x3088 panel.
++ * PMIC rails and DECON setup are the same on both phones.
++ */
++
++#include <board.h>
++#include <util.h>
++#include <string.h>
++#include <drivers/framework.h>
++#include <lib/simplefb.h>
++#include <drivers/samsung/exynos-acpm.h>
++#include "s2mps25-26-pmic.h"
++
++/* DECON Register MAP */
++#define HW_SW_TRIG_CONTROL	0x30
++
++/* MMIO MAP */
++#define EXYNOS_MAILBOX_AP2APM	0x15900000
++#define DECON_F_BASE		0x19f00000
++
++/* WDT Register MAP */
++#define S5E9925_WDT_BASE				0x10050000
++#define S5E9925_WDT_WTCON				(S5E9925_WDT_BASE + 0x0000)
++#define S5E9925_WDT_WTCLRINT				(S5E9925_WDT_BASE + 0x000C)
++#define S5E9925_WDT_PRESCALE(x)				((x) << 8)
++#define S5E9925_WDT_PRESCALE_MASK			(0xff << 8)
++
++#define S5E9925_WDT_WTCON_RSTEN				(1 << 0)
++#define S5E9925_WDT_WTCON_ENABLE			(1 << 5)
++
++#define S5E9925_CLUSTER0_NONCPU_INT_EN			(0x15860000 + 0x1244)
++#define S5E9925_nWDTRESET_EN				(1 << 2)
++
++void kill_dog(void)
++{
++	unsigned long wtcon, pmu_reg;
++
++	pmu_reg = readl((volatile unsigned int *) S5E9925_CLUSTER0_NONCPU_INT_EN);
++	pmu_reg &= ~S5E9925_nWDTRESET_EN;
++	writel(pmu_reg, (void *) S5E9925_CLUSTER0_NONCPU_INT_EN);
++
++	wtcon = readl((volatile unsigned int *) S5E9925_WDT_WTCON);
++	wtcon &= ~(S5E9925_WDT_WTCON_ENABLE | S5E9925_WDT_WTCON_RSTEN);
++	writel(wtcon, (void *) S5E9925_WDT_WTCON);
++
++	wtcon = readl((volatile unsigned int *) S5E9925_WDT_WTCON);
++	writel(1, (void *) S5E9925_WDT_WTCLRINT);
++}
++
++#define S2MPS25_REG_ENABLE		(0x3 << 6)
++
++/* (LV) LDOs 1M/2M/4M/5M/6M/7M/8M/9M/10M/11M/14M/19M */
++#define S2MPS25_LDO_MIN1	300000
++#define S2MPS25_LDO_STEP1	6250
++/* (IV) LDOs 3M/12M/13M/15M/16M/20M/21M/22M/23M/24M/25M/
++	     26M/27M/28M/29M/30M */
++#define S2MPS25_LDO_MIN2	1500000
++#define S2MPS25_LDO_STEP2	12500
++/* (MV) LDOs 14S ~ 20S */
++#define S2MPS26_LDO_MIN2	1800000
++#define S2MPS26_LDO_STEP2	25000
++
++void pmic_init(void)
++{
++	unsigned char reg;
++	void *mailbox_base = (void *)EXYNOS_MAILBOX_AP2APM;
++
++	spmi_read(mailbox_base, SUB_PMIC_ID, S2MPS26_PM1_ADDR, S2MPS26_REG_LDO17S_CTRL, &reg);
++	reg = S2MPS25_REG_ENABLE + (3000000 - S2MPS26_LDO_MIN2) / S2MPS26_LDO_STEP2;
++	spmi_write(mailbox_base, SUB_PMIC_ID, S2MPS26_PM1_ADDR, S2MPS26_REG_LDO17S_CTRL, reg);
++
++	spmi_read(mailbox_base, 0, S2MPS25_PM1_ADDR, S2MPS25_REG_LDO28M_CTRL, &reg);
++	reg = S2MPS25_REG_ENABLE + (1800000 - S2MPS25_LDO_MIN2) / S2MPS25_LDO_STEP2;
++	spmi_write(mailbox_base, 0, S2MPS25_PM1_ADDR, S2MPS25_REG_LDO28M_CTRL, reg);
++}
++
++int b0s_init(void)
++{
++	/* Allow framebuffer to be written to */
++	*(int*) (DECON_F_BASE + HW_SW_TRIG_CONTROL) = 0x1281;
++
++	kill_dog();
++	pmic_init();
++
++	return 0;
++}
++
++static struct video_info b0s_fb = {
++	.format = FB_FORMAT_ARGB8888,
++	.width = 1440,
++	.height = 3088,
++	.stride = 4,
++	.address = (void *)0xf6200000
++};
++
++static const struct device b0s_devices[] = {
++	{ "simplefb", &b0s_fb, "fb" },
++};
++
++struct board_data board_ops = {
++	.name = "samsung-b0s",
++	.ops = {
++		.early_init = b0s_init,
++	},
++	.devices = b0s_devices,
++	.num_devices = ARRAY_SIZE(b0s_devices),
++	.quirks = 0
++};
+diff --git a/configs/b0s_defconfig b/configs/b0s_defconfig
+new file mode 100644
+index 0000000..c77b1d7
+--- /dev/null
++++ b/configs/b0s_defconfig
+@@ -0,0 +1,8 @@
++CONFIG_POSITION_INDEPENDENT=y
++CONFIG_EXYNOS_2200=y
++CONFIG_EXYNOS_ACPM=y
++CONFIG_SAMSUNG_B0S=y
++CONFIG_TEXT_BASE=0x87000000
++CONFIG_PAYLOAD_ENTRY=0xa8000000
++CONFIG_RAMDISK_ENTRY=0xb0000000
++CONFIG_LINUX_KRNL_HEADER_IMG=y
+-- 
+2.56.0
+
