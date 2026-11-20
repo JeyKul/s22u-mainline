@@ -1,5 +1,17 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: EL3 precondition, G3D_TMR is EL2's only "type 1"
+- Corrupted signature byte and corrupted body byte both still give 0x5106a in ~25 us (baseline
+  25 us): EL3 rejects before parsing the signature. Earlier arg probes: 0x51023 (base 0x8fe00000)
+  and 0x51008 (bin size -4) also come from EL3, so EL3 knows G3D's base/size and checks them first.
+- H-Arx subsystem table (0x60-byte entries from name, at 0x1cd30): +0x40 enabled, +0x48 per-fw
+  data, +0x50 fw count, +0x54 type. MFC x2 type 0, ABOX/VTS/DNC/CHUB/GNSS type 2, G3D_TMR the only
+  type 1. Pre-signature routine 0x7ff8: type 2 skips, type != 2 reads the region's stage-2
+  attribute (0xc85c); type 1 keeps the region mapped with a rewritten attribute (bit 7 set, 7-8
+  cleared) via 0xc5bc, type 0 unmaps it ("Fail to unmap FW region from MMU Stage 2").
+- S-Boot only prints "TZ_GPU: %d" from a debug block at 0x900541e4 (no decision there).
+- Panel: blank with `echo 28 > /sys/kernel/debug/exynos2200-dsim-dcs` (29 = on) to avoid burn-in.
+
 ## 2026-11-20: GPU firmware verify: TEST B1 (Samsung kernel from boot) inconclusive, paused
 - boot-b1.img = TWRP kernel + ramdisk with a static /init (src/b1init: load TWRP's
   modules.load.recovery minus sgpu & its 12 dependents and softdog, pet watchdog0, insmod the
