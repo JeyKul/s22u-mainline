@@ -1,0 +1,272 @@
+From b25b68bd4029919f2732781fea04b9ee04d0b8dd Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 21:52:32 +0100
+Subject: [PATCH 25/27] PCI: add an emulated host for the Exynos 2200 GPU
+
+Present the Xclipse 920 as one PCI function (1002:163F, display class)
+with fixed BARs over its register windows (BAR5 GC, BAR2 doorbells),
+INTA routed to its GIC SPI, a PCIe RCiEP capability and nothing else,
+so that amdgpu can bind to it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pci/controller/Kconfig              |   8 +
+ drivers/pci/controller/Makefile             |   1 +
+ drivers/pci/controller/pci-exynos2200-gpu.c | 217 ++++++++++++++++++++
+ 3 files changed, 226 insertions(+)
+ create mode 100644 drivers/pci/controller/pci-exynos2200-gpu.c
+
+diff --git a/drivers/pci/controller/Kconfig b/drivers/pci/controller/Kconfig
+index d246bbe37..0426d71a6 100644
+--- a/drivers/pci/controller/Kconfig
++++ b/drivers/pci/controller/Kconfig
+@@ -144,6 +144,14 @@ config PCI_FTPCI100
+ 	depends on OF
+ 	default ARCH_GEMINI
+ 
++config PCI_EXYNOS2200_GPU
++	bool "Exynos 2200 GPU as an emulated PCI device"
++	depends on ARCH_EXYNOS || COMPILE_TEST
++	depends on OF
++	help
++	  Present the Xclipse 920 GPU as a single PCI function with fixed
++	  BARs over its register windows, so that amdgpu can bind to it.
++
+ config PCI_HOST_GENERIC
+ 	tristate "Generic PCI host controller"
+ 	depends on OF
+diff --git a/drivers/pci/controller/Makefile b/drivers/pci/controller/Makefile
+index d478743b5..2ea1a1953 100644
+--- a/drivers/pci/controller/Makefile
++++ b/drivers/pci/controller/Makefile
+@@ -66,3 +66,4 @@ obj-$(CONFIG_ARM64) += pci-thunder-pem.o
+ obj-$(CONFIG_ARM64) += pci-xgene.o
+ endif
+ endif
++obj-$(CONFIG_PCI_EXYNOS2200_GPU) += pci-exynos2200-gpu.o
+diff --git a/drivers/pci/controller/pci-exynos2200-gpu.c b/drivers/pci/controller/pci-exynos2200-gpu.c
+new file mode 100644
+index 000000000..17ca729eb
+--- /dev/null
++++ b/drivers/pci/controller/pci-exynos2200-gpu.c
+@@ -0,0 +1,217 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Exynos 2200 Xclipse 920 GPU as a PCI device.
++ *
++ * The GPU (an RDNA2 "Van Gogh lite" GC behind Samsung's bus) is a plain
++ * MMIO block, but amdgpu only knows how to bind to PCI devices. This host
++ * bridge emulates the config space of a single function on bus 0 whose
++ * fixed BARs are the GPU's register windows, so amdgpu can probe it:
++ *
++ *   BAR0  unimplemented (no VRAM aperture: the GPU uses system memory)
++ *   BAR2  doorbells, 0x16f00000, 1 MiB
++ *   BAR5  GC registers, 0x16e00000, 1 MiB
++ *   INTA  -> the GPU's GIC SPI, via the node's interrupt-map
++ *
++ * There is no MSI capability (amdgpu falls back to INTx) and no extended
++ * capability (no ATS, PASID, resizable BAR or SR-IOV). The PCIe capability
++ * says root complex integrated endpoint, so link speed queries stop at the
++ * root bus. The BARs are the hardware's windows: the node carries
++ * linux,pci-probe-only so the kernel claims them instead of reassigning.
++ */
++
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/pci.h>
++#include <linux/pci_regs.h>
++#include <linux/platform_device.h>
++#include <linux/spinlock.h>
++
++#define GPU_VENDOR	0x1002
++#define GPU_DEVICE	0x163f	/* Van Gogh: amdgpu's APU paths */
++#define GPU_CLASS	0x038000	/* display controller, not VGA */
++#define GPU_REV		0x00
++
++#define CAP_PCIE	0x40
++
++struct gpu_bar {
++	u32 base;
++	u32 size;	/* 0: unimplemented */
++};
++
++struct exynos2200_gpu_pci {
++	spinlock_t lock;
++	u8 cfg[256];
++	struct gpu_bar bar[6];
++	u32 bar_val[6];	/* what software last wrote */
++};
++
++static void cfg_init(struct exynos2200_gpu_pci *g)
++{
++	u8 *c = g->cfg;
++	int i;
++
++	memset(c, 0, sizeof(g->cfg));
++	*(u16 *)&c[PCI_VENDOR_ID] = GPU_VENDOR;
++	*(u16 *)&c[PCI_DEVICE_ID] = GPU_DEVICE;
++	*(u16 *)&c[PCI_STATUS] = PCI_STATUS_CAP_LIST;
++	*(u32 *)&c[PCI_CLASS_REVISION] = GPU_CLASS << 8 | GPU_REV;
++	c[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL;
++	*(u16 *)&c[PCI_SUBSYSTEM_VENDOR_ID] = GPU_VENDOR;
++	*(u16 *)&c[PCI_SUBSYSTEM_ID] = GPU_DEVICE;
++	c[PCI_CAPABILITY_LIST] = CAP_PCIE;
++	c[PCI_INTERRUPT_PIN] = 1;	/* INTA */
++
++	/* PCIe v2, root complex integrated endpoint, no link registers used */
++	c[CAP_PCIE + PCI_CAP_LIST_ID] = PCI_CAP_ID_EXP;
++	c[CAP_PCIE + PCI_CAP_LIST_NEXT] = 0;
++	*(u16 *)&c[CAP_PCIE + PCI_EXP_FLAGS] =
++		2 | PCI_EXP_TYPE_RC_END << 4;
++	*(u32 *)&c[CAP_PCIE + PCI_EXP_DEVCAP] = 0;	/* 128 B payload */
++
++	for (i = 0; i < 6; i++)
++		g->bar_val[i] = g->bar[i].base;
++}
++
++static u32 bar_read(struct exynos2200_gpu_pci *g, int i)
++{
++	struct gpu_bar *b = &g->bar[i];
++
++	if (!b->size)
++		return 0;
++	/* 32-bit, non-prefetchable memory BAR; sizing reads back the mask */
++	return g->bar_val[i] & ~(b->size - 1);
++}
++
++static void bar_write(struct exynos2200_gpu_pci *g, int i, u32 val)
++{
++	struct gpu_bar *b = &g->bar[i];
++
++	if (!b->size)
++		return;
++	/* fixed window: accept sizing (~0) and writes of the real base only */
++	g->bar_val[i] = val == ~0U || val == b->base ? val : b->base;
++}
++
++static int gpu_cfg_read(struct pci_bus *bus, unsigned int devfn, int where,
++			int size, u32 *val)
++{
++	struct exynos2200_gpu_pci *g = bus->sysdata;
++	unsigned long flags;
++	u32 v;
++
++	if (devfn != 0) {
++		*val = ~0U;
++		return PCIBIOS_DEVICE_NOT_FOUND;
++	}
++	if (where >= sizeof(g->cfg)) {
++		*val = 0;	/* no extended capabilities */
++		return PCIBIOS_SUCCESSFUL;
++	}
++
++	spin_lock_irqsave(&g->lock, flags);
++	if (where >= PCI_BASE_ADDRESS_0 && where < PCI_BASE_ADDRESS_5 + 4)
++		v = bar_read(g, (where - PCI_BASE_ADDRESS_0) / 4);
++	else
++		v = *(u32 *)&g->cfg[where & ~3];
++	spin_unlock_irqrestore(&g->lock, flags);
++
++	v >>= 8 * (where & 3);
++	*val = size == 4 ? v : v & ((1U << (8 * size)) - 1);
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static int gpu_cfg_write(struct pci_bus *bus, unsigned int devfn, int where,
++			 int size, u32 val)
++{
++	struct exynos2200_gpu_pci *g = bus->sysdata;
++	unsigned long flags;
++	u32 mask, shift, *w;
++
++	if (devfn != 0)
++		return PCIBIOS_DEVICE_NOT_FOUND;
++	if (where >= sizeof(g->cfg))
++		return PCIBIOS_SUCCESSFUL;
++
++	spin_lock_irqsave(&g->lock, flags);
++	if (where >= PCI_BASE_ADDRESS_0 && where < PCI_BASE_ADDRESS_5 + 4) {
++		if (size == 4)
++			bar_write(g, (where - PCI_BASE_ADDRESS_0) / 4, val);
++	} else {
++		/* writable: command, cache line, latency, IRQ line, PCIe control */
++		shift = 8 * (where & 3);
++		mask = (size == 4 ? ~0U : (1U << (8 * size)) - 1) << shift;
++		switch (where & ~3) {
++		case PCI_COMMAND:		/* not status: keep CAP_LIST */
++			mask &= 0xffff;
++			break;
++		case PCI_CACHE_LINE_SIZE:	/* + latency timer */
++			mask &= 0xffff;
++			break;
++		case PCI_INTERRUPT_LINE:
++			mask &= 0xff;
++			break;
++		case CAP_PCIE + PCI_EXP_DEVCTL:	/* devctl, not devsta */
++			mask &= 0xffff;
++			break;
++		default:
++			mask = 0;
++		}
++		w = (u32 *)&g->cfg[where & ~3];
++		*w = (*w & ~mask) | ((val << shift) & mask);
++	}
++	spin_unlock_irqrestore(&g->lock, flags);
++	return PCIBIOS_SUCCESSFUL;
++}
++
++static struct pci_ops gpu_pci_ops = {
++	.read	= gpu_cfg_read,
++	.write	= gpu_cfg_write,
++};
++
++static int exynos2200_gpu_pci_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct exynos2200_gpu_pci *g;
++	struct pci_host_bridge *bridge;
++	struct resource *res;
++
++	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*g));
++	if (!bridge)
++		return -ENOMEM;
++	g = pci_host_bridge_priv(bridge);
++	spin_lock_init(&g->lock);
++
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "doorbell");
++	if (!res)
++		return dev_err_probe(dev, -EINVAL, "no doorbell window\n");
++	g->bar[2] = (struct gpu_bar){ res->start, resource_size(res) };
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mmio");
++	if (!res)
++		return dev_err_probe(dev, -EINVAL, "no mmio window\n");
++	g->bar[5] = (struct gpu_bar){ res->start, resource_size(res) };
++	cfg_init(g);
++
++	bridge->sysdata = g;
++	bridge->ops = &gpu_pci_ops;
++
++	dev_info(dev, "GPU %04x:%04x, mmio %pR doorbell %#x/%#x\n", GPU_VENDOR,
++		 GPU_DEVICE, res, g->bar[2].base, g->bar[2].size);
++	return pci_host_probe(bridge);
++}
++
++static const struct of_device_id exynos2200_gpu_pci_of_match[] = {
++	{ .compatible = "samsung,exynos2200-gpu-pci" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, exynos2200_gpu_pci_of_match);
++
++static struct platform_driver exynos2200_gpu_pci_driver = {
++	.probe	= exynos2200_gpu_pci_probe,
++	.driver	= {
++		.name = "exynos2200-gpu-pci",
++		.of_match_table = exynos2200_gpu_pci_of_match,
++		.suppress_bind_attrs = true,
++	},
++};
++builtin_platform_driver(exynos2200_gpu_pci_driver);
+-- 
+2.56.0
+
