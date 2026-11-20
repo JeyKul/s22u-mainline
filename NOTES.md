@@ -1,5 +1,23 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware: EL3 rejects the signature (open)
+- Firmware = Samsung's unified blob v2.15.1 (tools/extract-gpu-fw.py from unified_firmware_sign.h;
+  byte-identical to the one in TWRP's and stock vendor_boot's sgpu.ko). Copied to 0x8ff00000.
+- EL2 verify: HVC 0xc6000110 ((fw_id<<32)|7 = G3D_TMR, 0x8ff00000, 0xdc000, 0xe0000) -> 0x5106a.
+  Same args as TWRP's exynos-s2mpu.ko. EL2 log (HVC 0xc6000043, read cursor; 0xc6000043(0,1) rewinds;
+  `echo el2log` repeatedly drains it): SHA-512 hash over fw[:0xdbe00] is right (matches host), then
+  "Fail to verify signature (0x5106a)" = EL3 crypto manager (SMC 0xc200101d) returns it in ~40 us;
+  in TWRP the same step takes 13 ms and passes ("G3D_TMR ... is verified!").
+- Without verification SMC 0x82000520(0,0,0) (RLC boot) returns 0x10001; the EL3-only path
+  (0x10000, base, size) returns 0x10004.
+- Fixed along the way (none fixed verify): EL2 lv3 table buf (HVC 0xc6000041, 4 MiB), S2MPUFD init
+  (0xc6000601), kernel text info (HVC 0xc6000105 base size; S-Boot registers garbage
+  801b0000/0x50 for uniLoader, TWRP gets 0x80180000/0x1cc0000) + BAN_KERNEL_RO (0xc6000104) now 0,
+  cacheable copy + clean to PoC, INT DVFS 400 MHz (Samsung's SSS QoS). G3D PD has no S2MPU (bit 39).
+- Dumped read-only: harx (EL2 H-Arx, sda9, unencrypted), epbl (S-Boot), sde (ldfw.img: CryptoManagerV60).
+  Never commit these. Reading EL2's RAM (0xc1200000) via /dev/mem hangs the CPU.
+- RCU stalls / soft lockups now panic (cmdline) so pstore + panic=5 cover hangs too.
+
 ## 2026-11-20: GPU powers on and answers MMIO
 - echo on > /sys/kernel/debug/exynos2200-g3d (drivers/soc/samsung/exynos2200-g3d.c), then
   GRBM_STATUS (0x16e08010) = 0x302c (idle), GRBM_CHIP_REVISION (0x16e08084) = 0x00600201 = MGFX0
