@@ -1,5 +1,16 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: touch + XFCE
+- Touch: USI02 SPI (google,gs101-spi config: 32-bit FIFO io), cs-gpios gpp2-3, IRQ gpa1-2 level low,
+  new driver stm-fts-spi (reset FA 20 00 00 24 81, sense on C0 10, events 0x87 + dummy byte).
+  Works (user confirmed). First transfer at probe times out (-110), later ones fine: TODO (clock
+  ungating? the chip still busy after S-Boot?).
+- Internet via PC NAT (tools/share-internet.sh, PC has NM profile b0s-usb 172.16.42.2 static).
+  pacman: Landlock was off -> sandbox failed; CONFIG_SECURITY_LANDLOCK=y now (pacman.conf still has
+  DisableSandbox* from before). Full -Syu done, XFCE + LightDM installed (tools/install-desktop.sh).
+- Phone hung once on `twrp` from Arch (no USB at all); user went to Download mode, odin4 flashes
+  boot.img directly (`odin4 -a boot.img -d <dev>`).
+
 ## 2026-11-20: UFS + Arch on userdata
 - UFS: hacen's PHY + host variant with the stock node layout (1-cell soc@0 regs!). HS-G4 L2, Samsung
   KLUFG8RHGB-B0E1 512 GB; FMP descriptor type 3 via SMC (UFSPR_SECURE path) works. dtbo/vendor_boot/

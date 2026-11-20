@@ -22,6 +22,7 @@ minimum target: GPU, display, HDMI.
 | RAM | ✅ | 11 GB usable; all stock carve-outs kept out |
 | Storage: UFS 3.1 | ✅ | HS-G4, 2 lanes; reads verified against the stock partitions |
 | Rootfs on userdata | ✅ | Arch Linux ARM on f2fs (the whole 464 GB); userspace up in about 5 s |
+| Desktop | ✅ | XFCE on Xorg (simpledrm, software rendering), LightDM autologin, 2x scaling (`tools/install-desktop.sh`) |
 | PMIC: S2MPS25/S2MPS26 (via ACPM) | ⬜ | Mainline `exynos-acpm` + `exynos-acpm-pmic` (gs101) to adapt. Unblocks regulators, power/vol-down keys, RTC |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
 | Thermal (TMU) | ⬜ | `exynos-acpm-tmu` |
@@ -42,7 +43,7 @@ minimum target: GPU, display, HDMI.
 | **Goal** GPU: Xclipse 920 (AMD RDNA2, gfx10.3 "Vangogh lite") | ⬜ | Samsung's `sgpu` is an amdgpu fork; plan: amdgpu with the Exynos glue (power domain, ACPM DVFS, firmware load via EL2), Mesa RADV/radeonsi. First blocker found on XNU: ACPM DVFS before the first G3D access |
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
 | Video decode/encode (MFC) | ⬜ | |
-| Touchscreen: STM FTS on SPI | ⬜ | Rails, pins and clocks known from the XNU port |
+| Touchscreen: STM FTS2BA61Y on SPI2 | ✅ | Multitouch (`stm-fts-spi`, new driver); rails still switched on by uniLoader |
 | S Pen (Wacom) | ⬜ | |
 | Fingerprint (ultrasonic) | ⬜ | Probably TrustZone-only |
 
@@ -105,6 +106,8 @@ initramfs/build.sh        # Alpine busybox-static + helpers
 tools/mkboot.sh           # -> out/boot.img
 tools/flash-boot.sh       # phone in TWRP: push, dd, verify sha256, reboot
 tools/install-rootfs.sh --yes-erase-userdata   # TWRP: f2fs + Arch Linux ARM on userdata
+sudo tools/share-internet.sh                   # on the PC: NAT for the phone
+tools/install-desktop.sh                       # XFCE + LightDM
 ```
 
 Then: `ssh root@172.16.42.1` (add your key first over the serial console,

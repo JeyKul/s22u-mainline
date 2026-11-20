@@ -47,6 +47,9 @@ gadget_up() {
 	echo "b0s-mainline" > $g/strings/0x409/serialnumber
 	echo "acm+ncm" > $g/configs/c.1/strings/0x409/configuration
 	mkdir -p $g/functions/acm.usb0 $g/functions/ncm.usb0
+	# fixed MACs: the PC keeps the same usb0 across boots
+	echo 02:b0:5e:00:00:01 > $g/functions/ncm.usb0/dev_addr
+	echo 02:b0:5e:00:00:02 > $g/functions/ncm.usb0/host_addr
 	ln -s $g/functions/acm.usb0 $g/configs/c.1/
 	ln -s $g/functions/ncm.usb0 $g/configs/c.1/
 	for i in $(seq 1 50); do

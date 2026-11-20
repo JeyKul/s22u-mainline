@@ -4,11 +4,15 @@ Name=usb0
 
 [Network]
 Address=172.16.42.1/24
+# internet through the PC (tools/share-internet.sh there)
+Gateway=172.16.42.2
+DNS=1.1.1.1
+DNS=9.9.9.9
 DHCPServer=yes
 IPv6LinkLocalAddressGenerationMode=eui64
 
 [DHCPServer]
 PoolOffset=2
-PoolSize=1
+PoolSize=20
 EmitDNS=no
 EmitRouter=no

@@ -1,0 +1,102 @@
+From ecbe12986f25ffaa2b7b2f32a0f5cac3a4969a6e Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 13:58:55 +0100
+Subject: [PATCH 7/7] arm64: dts: exynos2200-b0s: enable SPI2 and the
+ touchscreen
+
+USI02 in SPI mode (gs101-style 32-bit FIFO access, GPIO chip select on
+gpp2-3) with the STM FTS touchscreen, interrupt on gpa1-2. The supplies
+(LDO28M 1.8 V, LDO17S 3.0 V) are switched on by uniLoader until the
+PMIC is supported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 58 +++++++++++++++++++
+ 1 file changed, 58 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index ab1e23b05..47ecbd8bf 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -14,6 +14,7 @@
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
++#include <dt-bindings/soc/samsung,exynos-usi.h>
+ 
+ / {
+ 	model = "Samsung Galaxy S22 Ultra (SM-S908B)";
+@@ -248,6 +249,56 @@ ufs: ufs@11100000 {
+ 	};
+ };
+ 
++&pinctrl_peric2 {
++	spi2_bus: spi2-bus-pins {
++		samsung,pins = "gpp2-0", "gpp2-1", "gpp2-2";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_2>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
++		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV1>;
++	};
++
++	spi2_cs: spi2-cs-pins {
++		samsung,pins = "gpp2-3";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_OUTPUT>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
++		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV1>;
++	};
++};
++
++&usi2 {
++	samsung,mode = <USI_MODE_SPI>;
++	status = "okay";
++
++	spi_2: spi@11d40000 {
++		compatible = "samsung,exynos2200-spi", "google,gs101-spi";
++		reg = <0x11d40000 0xc0>;
++		interrupts = <GIC_SPI 708 IRQ_TYPE_LEVEL_HIGH 0>;
++		clocks = <&cmu_peric2 CLK_MOUT_PERIC2_NOC_USER>,
++			 <&cmu_peric2 CLK_DOUT_PERIC2_USI02>;
++		clock-names = "spi", "spi_busclk0";
++		pinctrl-0 = <&spi2_bus &spi2_cs>;
++		pinctrl-names = "default";
++		cs-gpios = <&gpp2 3 GPIO_ACTIVE_LOW>;
++		num-cs = <1>;
++		samsung,spi-src-clk = <0>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		/* rails (LDO28M 1.8 V, LDO17S 3.0 V) are switched on by uniLoader */
++		touchscreen@0 {
++			compatible = "st,fts2ba61y";
++			reg = <0>;
++			spi-max-frequency = <10000000>;
++			interrupt-parent = <&gpa1>;
++			interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
++			pinctrl-0 = <&touch_irq>;
++			pinctrl-names = "default";
++			touchscreen-size-x = <4096>;
++			touchscreen-size-y = <4096>;
++		};
++	};
++};
++
+ &cmu_hsi0 {
+ 	clocks = <&xtcxo>,
+ 		 <&rtcclk>,
+@@ -271,6 +322,13 @@ &mct_peris {
+ };
+ 
+ &pinctrl_alive {
++	touch_irq: touch-irq-pins {
++		samsung,pins = "gpa1-2";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
++		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV1>;
++	};
++
+ 	key_volup: key-volup-pins {
+ 		samsung,pins = "gpa3-0";
+ 		samsung,pin-function = <EXYNOS_PIN_FUNC_F>;
+-- 
+2.56.0
+

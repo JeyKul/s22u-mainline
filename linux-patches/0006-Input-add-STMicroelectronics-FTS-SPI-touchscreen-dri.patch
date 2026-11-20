@@ -1,0 +1,333 @@
+From 1eabfcba227724e6739d9f541fdbb360f75e3d20 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 13:58:55 +0100
+Subject: [PATCH 6/7] Input: add STMicroelectronics FTS SPI touchscreen driver
+
+Minimal driver for the FTS2BA61Y on SPI, as found in the Samsung Galaxy
+S22 Ultra: system reset, sense on, then 16-byte events read with 0x87
+on the (level) interrupt; coordinate events are reported as MT type B.
+Protocol taken from Samsung's GPL stm_ts driver.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/Kconfig       |  10 +
+ drivers/input/touchscreen/Makefile      |   1 +
+ drivers/input/touchscreen/stm-fts-spi.c | 273 ++++++++++++++++++++++++
+ 3 files changed, 284 insertions(+)
+ create mode 100644 drivers/input/touchscreen/stm-fts-spi.c
+
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 9b9ae8ac3..3e12043c2 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -1240,6 +1240,16 @@ config TOUCHSCREEN_ST1232
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called st1232_ts.
+ 
++config TOUCHSCREEN_STM_FTS_SPI
++	tristate "STMicroelectronics FTS SPI touchscreen"
++	depends on SPI
++	help
++	  Say Y here for the SPI STMicroelectronics FTS touchscreen
++	  (FTS2BA61Y), as found in the Samsung Galaxy S22 Ultra.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called stm-fts-spi.
++
+ config TOUCHSCREEN_STMFTS
+ 	tristate "STMicroelectronics STMFTS touchscreen"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index bfd9de833..c8c3bdd90 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -81,6 +81,7 @@ obj-$(CONFIG_TOUCHSCREEN_S6SY761)	+= s6sy761.o
+ obj-$(CONFIG_TOUCHSCREEN_SILEAD)	+= silead.o
+ obj-$(CONFIG_TOUCHSCREEN_SIS_I2C)	+= sis_i2c.o
+ obj-$(CONFIG_TOUCHSCREEN_ST1232)	+= st1232.o
++obj-$(CONFIG_TOUCHSCREEN_STM_FTS_SPI)	+= stm-fts-spi.o
+ obj-$(CONFIG_TOUCHSCREEN_STMFTS)	+= stmfts.o
+ obj-$(CONFIG_TOUCHSCREEN_STMPE)		+= stmpe-ts.o
+ obj-$(CONFIG_TOUCHSCREEN_SUN4I)		+= sun4i-ts.o
+diff --git a/drivers/input/touchscreen/stm-fts-spi.c b/drivers/input/touchscreen/stm-fts-spi.c
+new file mode 100644
+index 000000000..29908c1d6
+--- /dev/null
++++ b/drivers/input/touchscreen/stm-fts-spi.c
+@@ -0,0 +1,273 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * STMicroelectronics FTS touchscreen on SPI (FTS2BA61Y and similar), as
++ * used in the Samsung Galaxy S22 Ultra.
++ *
++ * Protocol from Samsung's stm_ts driver: writes are prefixed with 0xc0
++ * except for a few raw commands, events are 16 bytes read with 0x87
++ * (one dummy byte after the command), byte 7 counts the events left.
++ */
++
++#include <linux/bits.h>
++#include <linux/delay.h>
++#include <linux/input.h>
++#include <linux/input/mt.h>
++#include <linux/input/touchscreen.h>
++#include <linux/interrupt.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/regulator/consumer.h>
++#include <linux/spi/spi.h>
++
++#define FTS_CMD_SENSE_ON		0x10
++#define FTS_CMD_READ_EVENT		0x87
++#define FTS_CMD_REG_W			0xfa
++#define FTS_WRITE_PREFIX		0xc0
++
++#define FTS_EVENT_SIZE			16
++#define FTS_MAX_EVENTS			32
++#define FTS_MAX_FINGERS			10
++#define FTS_COORD_MAX			4096
++
++#define FTS_EID(b)			((b) & 0x3)
++#define FTS_EID_COORDINATE		0
++#define FTS_EID_STATUS			1
++#define FTS_TID(b)			(((b) >> 2) & 0xf)
++#define FTS_ACTION(b)			(((b) >> 6) & 0x3)
++#define FTS_ACTION_PRESS		1
++#define FTS_ACTION_MOVE			2
++#define FTS_ACTION_RELEASE		3
++#define FTS_LEFT_EVENTS(b)		((b) & 0x1f)
++
++/* status event (eid 1), type info (2), id ready (0) */
++#define FTS_EVENT_READY			0x09
++#define FTS_INFO_READY			0x00
++#define FTS_EVENT_ERROR			0xf3
++
++struct fts_spi {
++	struct spi_device *spi;
++	struct input_dev *input;
++	struct touchscreen_properties prop;
++	struct regulator_bulk_data supplies[2];
++	u8 tx[4 + FTS_EVENT_SIZE * FTS_MAX_EVENTS] ____cacheline_aligned;
++	u8 rx[4 + FTS_EVENT_SIZE * FTS_MAX_EVENTS];
++};
++
++static int fts_spi_write(struct fts_spi *ts, bool prefix, const u8 *data,
++			 size_t len)
++{
++	u8 buf[8];
++	size_t n = 0;
++
++	if (len + 1 > sizeof(buf))
++		return -EINVAL;
++	if (prefix)
++		buf[n++] = FTS_WRITE_PREFIX;
++	memcpy(buf + n, data, len);
++
++	return spi_write(ts->spi, buf, n + len);
++}
++
++/* Read @count events into ts->rx + 2 (command byte, dummy byte, data) */
++static int fts_spi_read_events(struct fts_spi *ts, unsigned int count)
++{
++	struct spi_transfer xfer = {
++		.tx_buf = ts->tx,
++		.rx_buf = ts->rx,
++		.len = 2 + count * FTS_EVENT_SIZE,
++	};
++
++	memset(ts->tx, 0, xfer.len);
++	ts->tx[0] = FTS_CMD_READ_EVENT;
++
++	return spi_sync_transfer(ts->spi, &xfer, 1);
++}
++
++static void fts_spi_report(struct fts_spi *ts, const u8 *ev)
++{
++	unsigned int tid = FTS_TID(ev[0]);
++	unsigned int action = FTS_ACTION(ev[0]);
++	unsigned int x, y;
++
++	if (tid >= FTS_MAX_FINGERS)
++		return;
++
++	x = (ev[1] << 4) | (ev[3] >> 4);
++	y = (ev[2] << 4) | (ev[3] & 0xf);
++
++	input_mt_slot(ts->input, tid);
++	if (action == FTS_ACTION_RELEASE) {
++		input_mt_report_slot_inactive(ts->input);
++		return;
++	}
++
++	input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, true);
++	touchscreen_report_pos(ts->input, &ts->prop, x, y, true);
++	input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, ev[4]);
++	input_report_abs(ts->input, ABS_MT_TOUCH_MINOR, ev[5]);
++	input_report_abs(ts->input, ABS_MT_PRESSURE, (ev[6] & 0x3f) ?: 1);
++}
++
++static irqreturn_t fts_spi_irq(int irq, void *data)
++{
++	struct fts_spi *ts = data;
++	unsigned int left, i;
++	const u8 *ev;
++
++	if (fts_spi_read_events(ts, 1))
++		return IRQ_HANDLED;
++
++	ev = ts->rx + 2;
++	left = FTS_LEFT_EVENTS(ev[7]);
++	if (left) {
++		left = min(left, FTS_MAX_EVENTS - 1U);
++		/* re-read the first one together with the rest */
++		if (fts_spi_read_events(ts, left + 1))
++			return IRQ_HANDLED;
++	}
++
++	for (i = 0; i <= left; i++) {
++		ev = ts->rx + 2 + i * FTS_EVENT_SIZE;
++		if (FTS_EID(ev[0]) == FTS_EID_COORDINATE)
++			fts_spi_report(ts, ev);
++	}
++
++	input_mt_sync_frame(ts->input);
++	input_sync(ts->input);
++
++	return IRQ_HANDLED;
++}
++
++static int fts_spi_wait_ready(struct fts_spi *ts)
++{
++	const u8 *ev = ts->rx + 2;
++	int i, ret;
++
++	for (i = 0; i < 50; i++) {
++		ret = fts_spi_read_events(ts, 1);
++		if (ret)
++			return ret;
++		if ((ev[0] & 0x3f) == FTS_EVENT_READY && ev[1] == FTS_INFO_READY)
++			return 0;
++		if (ev[0] == FTS_EVENT_ERROR)
++			dev_warn(&ts->spi->dev, "error event %*ph\n", 8, ev);
++		msleep(10);
++	}
++
++	dev_warn(&ts->spi->dev, "no ready event, last %*ph\n", 8, ev);
++	return -ETIMEDOUT;
++}
++
++static int fts_spi_start(struct fts_spi *ts)
++{
++	static const u8 reset[] = { FTS_CMD_REG_W, 0x20, 0x00, 0x00, 0x24, 0x81 };
++	static const u8 sense_on[] = { FTS_CMD_SENSE_ON };
++	int ret;
++
++	ret = fts_spi_write(ts, false, reset, sizeof(reset));
++	if (ret)
++		return ret;
++	msleep(30);
++
++	ret = fts_spi_wait_ready(ts);
++	if (ret == -ETIMEDOUT)
++		ret = 0;	/* some firmware stays quiet; try anyway */
++	if (ret)
++		return ret;
++
++	return fts_spi_write(ts, true, sense_on, sizeof(sense_on));
++}
++
++static int fts_spi_probe(struct spi_device *spi)
++{
++	struct device *dev = &spi->dev;
++	struct fts_spi *ts;
++	int ret;
++
++	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++	ts->spi = spi;
++	spi_set_drvdata(spi, ts);
++
++	spi->mode = SPI_MODE_0;
++	spi->bits_per_word = 8;
++	ret = spi_setup(spi);
++	if (ret)
++		return ret;
++
++	ts->supplies[0].supply = "vdd";
++	ts->supplies[1].supply = "avdd";
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(ts->supplies),
++				      ts->supplies);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get supplies\n");
++	ret = regulator_bulk_enable(ARRAY_SIZE(ts->supplies), ts->supplies);
++	if (ret)
++		return ret;
++	msleep(20);
++
++	ts->input = devm_input_allocate_device(dev);
++	if (!ts->input)
++		return -ENOMEM;
++	ts->input->name = "STM FTS touchscreen";
++	ts->input->id.bustype = BUS_SPI;
++
++	input_set_abs_params(ts->input, ABS_MT_POSITION_X, 0, FTS_COORD_MAX - 1, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_POSITION_Y, 0, FTS_COORD_MAX - 1, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_TOUCH_MINOR, 0, 255, 0, 0);
++	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0, 63, 0, 0);
++	touchscreen_parse_properties(ts->input, true, &ts->prop);
++
++	ret = input_mt_init_slots(ts->input, FTS_MAX_FINGERS,
++				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
++	if (ret)
++		goto err_off;
++
++	ret = input_register_device(ts->input);
++	if (ret)
++		goto err_off;
++
++	ret = fts_spi_start(ts);
++	if (ret) {
++		dev_err(dev, "failed to start: %d\n", ret);
++		goto err_off;
++	}
++
++	ret = devm_request_threaded_irq(dev, spi->irq, NULL, fts_spi_irq,
++					IRQF_ONESHOT, "stm-fts-spi", ts);
++	if (ret)
++		goto err_off;
++
++	return 0;
++
++err_off:
++	regulator_bulk_disable(ARRAY_SIZE(ts->supplies), ts->supplies);
++	return ret;
++}
++
++static const struct of_device_id fts_spi_of_match[] = {
++	{ .compatible = "st,fts2ba61y" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, fts_spi_of_match);
++
++static const struct spi_device_id fts_spi_ids[] = {
++	{ "fts2ba61y" },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, fts_spi_ids);
++
++static struct spi_driver fts_spi_driver = {
++	.driver = {
++		.name = "stm-fts-spi",
++		.of_match_table = fts_spi_of_match,
++	},
++	.probe = fts_spi_probe,
++	.id_table = fts_spi_ids,
++};
++module_spi_driver(fts_spi_driver);
++
++MODULE_DESCRIPTION("STMicroelectronics FTS SPI touchscreen");
++MODULE_LICENSE("GPL");
+-- 
+2.56.0
+
