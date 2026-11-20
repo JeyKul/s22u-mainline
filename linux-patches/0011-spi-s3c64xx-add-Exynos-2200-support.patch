@@ -1,0 +1,53 @@
+From 6f6348917d7c0a118a079b0451e9e32dac9c6c70 Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:19:06 +0100
+Subject: [PATCH 11/13] spi: s3c64xx: add Exynos 2200 support
+
+Like gs101 (32-bit FIFO access, clock from the CMU), but the FIFO depth
+differs between USI instances (256 bytes on USI02, 64 on others), so it
+comes from the fifo-depth property. With the gs101 value of 64, the RX
+ready level of IRQ-mode transfers (> 32 bytes) is not scaled for a
+256-byte FIFO and every such transfer times out.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/spi/spi-s3c64xx.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/spi/spi-s3c64xx.c b/drivers/spi/spi-s3c64xx.c
+index 8d4120cf9..b521265ee 100644
+--- a/drivers/spi/spi-s3c64xx.c
++++ b/drivers/spi/spi-s3c64xx.c
+@@ -1594,6 +1594,19 @@ static const struct s3c64xx_spi_port_config fsd_spi_port_config = {
+ 	.quirks		= S3C64XX_SPI_QUIRK_CS_AUTO,
+ };
+ 
++/* gs101-like, but the FIFO depth differs per instance: from "fifo-depth" */
++static const struct s3c64xx_spi_port_config exynos2200_spi_port_config = {
++	.rx_fifomask	= S3C64XX_SPI_ST_RX_FIFO_RDY_V2,
++	.tx_fifomask	= S3C64XX_SPI_ST_TX_FIFO_RDY_V2,
++	.tx_st_done	= 25,
++	.clk_div	= 4,
++	.high_speed	= true,
++	.clk_from_cmu	= true,
++	.has_loopback	= true,
++	.use_32bit_io	= true,
++	.quirks		= S3C64XX_SPI_QUIRK_CS_AUTO,
++};
++
+ static const struct s3c64xx_spi_port_config gs101_spi_port_config = {
+ 	.fifo_depth	= 64,
+ 	.rx_fifomask	= S3C64XX_SPI_ST_RX_FIFO_RDY_V2,
+@@ -1620,6 +1633,9 @@ static const struct of_device_id s3c64xx_spi_dt_match[] = {
+ 	{ .compatible = "google,gs101-spi",
+ 			.data = &gs101_spi_port_config,
+ 	},
++	{ .compatible = "samsung,exynos2200-spi",
++			.data = &exynos2200_spi_port_config,
++	},
+ 	{ .compatible = "samsung,s3c6410-spi",
+ 			.data = &s3c6410_spi_port_config,
+ 	},
+-- 
+2.56.0
+

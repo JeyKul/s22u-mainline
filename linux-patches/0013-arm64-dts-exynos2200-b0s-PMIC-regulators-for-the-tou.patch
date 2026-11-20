@@ -1,0 +1,76 @@
+From 5d7bac1af03d91c70aa12400099f3f228751da5f Mon Sep 17 00:00:00 2001
+From: JeyKul <minkajey@gmail.com>
+Date: Fri, 20 Nov 2026 14:19:06 +0100
+Subject: [PATCH 13/13] arm64: dts: exynos2200-b0s: PMIC regulators for the
+ touchscreen
+
+Describe S2MPS25 LDO28M (1.8 V) and S2MPS26 LDO17S (3.0 V) and use them
+as the touchscreen supplies; set the SPI2 FIFO depth (256 bytes).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 31 ++++++++++++++++++-
+ 1 file changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 8d4a2b63e..bb1184743 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -227,6 +227,33 @@ acpm_ipc: power-management {
+ 			compatible = "samsung,exynos2200-acpm-ipc";
+ 			mboxes = <&ap2apm_mailbox>;
+ 			shmem = <&apm_sram>;
++
++			/* only the rails Linux uses are listed */
++			pmic-main {
++				compatible = "samsung,s2mps25-pmic";
++
++				regulators {
++					ldo28m: ldo28m {
++						regulator-name = "tsp_io";
++						regulator-min-microvolt = <1800000>;
++						regulator-max-microvolt = <1800000>;
++						regulator-boot-on;
++					};
++				};
++			};
++
++			pmic-sub {
++				compatible = "samsung,s2mps26-pmic";
++
++				regulators {
++					ldo17s: ldo17s {
++						regulator-name = "tsp_avdd";
++						regulator-min-microvolt = <3000000>;
++						regulator-max-microvolt = <3000000>;
++						regulator-boot-on;
++					};
++				};
++			};
+ 		};
+ 	};
+ };
+@@ -296,6 +323,7 @@ &usi2 {
+ 
+ 	spi_2: spi@11d40000 {
+ 		compatible = "samsung,exynos2200-spi", "google,gs101-spi";
++		fifo-depth = <256>;
+ 		reg = <0x11d40000 0xc0>;
+ 		interrupts = <GIC_SPI 708 IRQ_TYPE_LEVEL_HIGH 0>;
+ 		clocks = <&cmu_peric2 CLK_MOUT_PERIC2_NOC_USER>,
+@@ -309,10 +337,11 @@ spi_2: spi@11d40000 {
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+ 
+-		/* rails (LDO28M 1.8 V, LDO17S 3.0 V) are switched on by uniLoader */
+ 		touchscreen@0 {
+ 			compatible = "st,fts2ba61y";
+ 			reg = <0>;
++			vdd-supply = <&ldo28m>;
++			avdd-supply = <&ldo17s>;
+ 			spi-max-frequency = <10000000>;
+ 			interrupt-parent = <&gpa1>;
+ 			interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+-- 
+2.56.0
+
