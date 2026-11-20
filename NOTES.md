@@ -29,6 +29,12 @@
 - Run 3: /init + 315 modules, then panic at 4.6 s: "(1ac40000.sysmmu) From [DPU_DMA_TOP], SysMMU
   READ PAGE FAULT at 0xf627f940": the DPU driver turns its SysMMU on while DECON still scans the
   boot fb. Display modules (exynos-drm, mcd-panel*, dependents) now left out: 289 modules.
+- Run 4 (MILESTONE 2): /init, 289 modules, "xt: modules done, sgpu insmod 0", log saved to userdata
+  (logs/xt-1609504124.log, not committed). EL2: "Derive new hash - G3D_TMR sub-system FW[0]" ->
+  "G3D_TMR sub-system[7] FW[0] is verified!" 13 ms later -> "Report G3D_TMR FW info to EL3_Monitor"
+  -> "Allow G3D_TMR ... S2MPU access permission". A FRESH EL3 signature check passes with Samsung's
+  kernel booted from `boot` by S-Boot in normal mode (no uniLoader, no TWRP). => Not normal vs
+  recovery mode: the missing piece is on the Linux side. Next: milestone 3, HVC/SMC call trace.
 
 ## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
 - src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
