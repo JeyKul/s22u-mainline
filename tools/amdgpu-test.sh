@@ -14,6 +14,6 @@ else
 fi
 aarch64-linux-gnu-strip --strip-debug -o "$TOP/out/amdgpu.ko" "$B/$KO"
 "${SSH[@]}" "cat > /usr/lib/modules/\$(uname -r)/kernel/$KO && sync && { (sleep 1; reboot) >/dev/null 2>&1 & }" < "$TOP/out/amdgpu.ko"
-sleep 15
+sleep 25
 for i in $(seq 1 40); do "${SSH[@]}" -o ConnectTimeout=3 true 2>/dev/null && break; sleep 5; done
-"${SSH[@]}" "echo on > /sys/kernel/debug/exynos2200-g3d; modprobe amdgpu $*; dmesg | grep -E 'amdgpu|xclipse|Xclipse|Call trace|pc :|lr :' | tail -60; screen-off"
+"${SSH[@]}" "G=/sys/kernel/debug/exynos2200-g3d; echo s2mpufd > \$G; echo on > \$G; echo fw > \$G; dmesg | grep -E 'fw (verify|stage2|boot)|autoload' | tail -4; modprobe amdgpu $*; dmesg | grep -E 'amdgpu|xclipse|Xclipse|Call trace|pc :|lr :' | tail -60; screen-off"

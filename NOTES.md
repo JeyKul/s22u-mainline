@@ -1,5 +1,43 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GFX RING + IB TESTS PASS on mainline amdgpu (linux-patches/0030)
+- `cat /sys/kernel/debug/dri/1/amdgpu_test_ib` -> "ib ring tests passed."; hw_init OK,
+  "SE 1, SH per SE 1, CU per SH 6, active_cu_number 6".
+- Sequence: s2mpufd, on, fw (debugfs), then modprobe amdgpu (tools/amdgpu-test.sh does all of it).
+- What it took (each found on the phone):
+  - PFP hangs after unhalt (CP_STAT 80808000, CP_BUSY_STAT RCIU_PFP_BUSY, PFP IP stuck at 0xab)
+    unless the MEC is unhalted first: reproduced by hand right after fw boot via debugfs `wr`
+    (CP_MEC_CNTL=0 then CP_ME_CNTL=01000000 -> CP_STAT 0). cp_resume now enables the MEC.
+  - CPF page faults with WALKER_ERROR: GCVM_L2_CNTL4.VMC_TAP_PDE/PTE_REQUEST_PHYSICAL must be 1
+    (tables in system RAM), GCVM_L2_CNTL3 = 0x00100003 (sgpu). Not an address-range limit
+    (GART table at 0x82000000 faulted the same).
+  - GART table in system RAM (amdgpu_gart_table_ram_alloc, PDE = phys|VALID|SYSTEM|SNOOPED, as sgpu).
+  - System aperture extended to the TMR (gmc.fb_end = 0x8fffffff).
+  - gfx config from sgpu's built-in gpu_info (no discovery): 1 SE, 1 SH, 6 CU/SH, 3 RB, 4 TCC.
+  - No KIQ: gfx queue mapped by PIO (HQD regs from the MQD); no CE/GDS/HDP/SMUIO/golden regs;
+    clock counter from RLC; amdgpu_dpm_is_overdrive_enabled NULL-safe without powerplay.
+  - EVT1.1 (rev 00600201): sgpu's emu_soc_asic_init tables don't apply.
+- Open: open() oops in amdgpu_vm_init_entities (Xorg): VM PTE updates need a copy engine; sgpu uses
+  amdgpu_vm_update_mode=3 (CPU updates). Next: vm_update_mode CPU + no PTE entities, then compute
+  queues by PIO (4 KCQ), then Mesa (radv/radeonsi with a Xclipse ID).
+- tools/gcreg.sh: read GC registers by name over ssh (debugfs rd).
+- Unload after a failed probe can freeze the phone (oops chain in fini): stream `dmesg -w` to the PC.
+
+## 2026-11-20: amdgpu device init completes (common + GMC + gIH)
+- `[drm] Initialized amdgpu 3.64.0`, "PCIE GART of 1024M enabled (table at 0x8FC00000)",
+  "gIH: version 00000100 status 0008047f". linux-patches/0029.
+- Fixes on the way: no HDP (no-op hdp funcs; sgpu skips HDP too, GPU is dma-coherent), GMC TLB flush
+  skips hubs not in vmhubs_mask (no MMHUB), ucode load type DIRECT for Xclipse (no fw_buf; EL3 boots
+  the RLC/CP fw), nv common cg/get_cg return early (no SMUIO/HDP funcs).
+- IH: xclipse920_ih.c = gIH, the GC-internal IH (GC seg1 0x2f40.., GC 10.4 only): ring by bus
+  address, no doorbell, no wptr write-back (Samsung: gIH erratum), interrupts via INTx -> SPI 467.
+- Remaining oops: on open() (amdgpu_vm_init_entities, no rings yet). Expected until GFX.
+- GFX plan from sgpu: NO KIQ on Van Gogh lite (no KIQ irq/ring/resume). me 1 pipe x 4 queues,
+  mec 1 mec x 1 pipe x 4 queues. Async gfx ring with the KGQ programmed by PIO
+  (gfx_v10_0_async_kgq_resume_pio: mqd_init + gfx_queue_init_register under grbm_select), KCQs by
+  PIO too (pio_map_queue: kiq_init_register). gfx config: max_hw_contexts 8, sc_prim_fifo 0x20/0x100,
+  hiz 0, earlyz 0x4C0.
+
 ## 2026-11-20: HANDOFF: amdgpu bring-up state (stopped mid-step)
 Where it stands
 - Phone: mainline direct boot (out/boot-direct.img, built by tools/mkboot-direct.sh) with the GPU PCI
