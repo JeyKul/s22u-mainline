@@ -12,7 +12,11 @@
 - AFTER the verify (idx 122+): SET_DEBUG_MEM (-120), CM init c2001031(1)/(2), c6000040 EL2 crash
   buf, **c6000041 SET_EL2_LV3_TABLE_BUF (0x89d400000, 4M)**, c6000042, c6000020, seclog 82000610,
   tzasc, ppmpu, secmem, RNG. Mainline always did c6000041 (`el2`) BEFORE the verify.
-- Next (mainline boot): s2mpufd, fw, without el2 (no LV3 table yet).
+- Mainline direct boot, s2mpufd then fw, no el2 (no LV3 table): still 0x5106a in 37 us. Not the
+  LV3 table. The SMC/HVC sequences before the verify now match in everything that writes state
+  (BAN_KERNEL_RO, S2MPUFD, G3D PD restore, same verify args) => the difference is not an SMC/HVC.
+- research/logs/ holds the scrubbed run log + trace.
+- Next: byte-compare the 0xe0000 region at 0x8ff00000 as Samsung's sgpu leaves it (TWRP) with ours.
 
 ## 2026-11-20: GPU round 2, PATH 2: Samsung kernel from source, direct boot
 - ExtremeXT tree (ref/xt-kernel, branch b0s-direct): s5e9925_defconfig + b0s.config, WERROR off,
