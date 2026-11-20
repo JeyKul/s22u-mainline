@@ -11,6 +11,11 @@
 
 #define N 4096
 
+static const char *cs_store =
+	"#version 310 es\n"
+	"layout(local_size_x = 64) in;\n"
+	"layout(std430, binding = 0) buffer B { uint v[]; };\n"
+	"void main() { uint i = gl_GlobalInvocationID.x; v[i] = i * 3u + 7u; }\n";
 static const char *cs =
 	"#version 310 es\n"
 	"layout(local_size_x = 64) in;\n"
@@ -40,7 +45,8 @@ int main(int argc, char **argv)
 	fflush(stdout);
 
 	s = glCreateShader(GL_COMPUTE_SHADER);
-	glShaderSource(s, 1, &cs, NULL);
+	int store_mode = getenv("GLCOMP_STORE") != NULL;
+	glShaderSource(s, 1, store_mode ? &cs_store : &cs, NULL);
 	glCompileShader(s);
 	glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
 	if (!ok) { fprintf(stderr, "compile failed\n"); return 1; }
@@ -56,6 +62,11 @@ int main(int argc, char **argv)
 		init[i] = i ? 0xaaaaaaaa : 0;
 	glBufferData(GL_SHADER_STORAGE_BUFFER, N * 4, init, GL_DYNAMIC_READ);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, b);
+	if (getenv("GLCOMP_NODISPATCH")) {
+		glFinish();
+		printf("compiled, not dispatched\n");
+		return 0;
+	}
 	printf("dispatch\n");
 	fflush(stdout);
 	glDispatchCompute(4, 1, 1);	/* 256 invocations */
@@ -67,7 +78,13 @@ int main(int argc, char **argv)
 	unsigned *v = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, N * 4, GL_MAP_READ_BIT);
 	for (i = 0; i < 40; i++)
 		printf("%08x%c", v[i], i % 8 == 7 ? '\n' : ' ');
-	bad = v[0] != 256;
-	printf("%s: %u invocations counted (expect 256)\n", bad ? "FAIL" : "PASS", v[0]);
+	if (store_mode) {
+		for (i = 0; i < 256; i++)
+			bad += v[i] != i * 3u + 7u;
+		printf("%s: %d/256 stores wrong\n", bad ? "FAIL" : "PASS", bad);
+	} else {
+		bad = v[0] != 256;
+		printf("%s: %u invocations counted (expect 256)\n", bad ? "FAIL" : "PASS", v[0]);
+	}
 	return !!bad;
 }
