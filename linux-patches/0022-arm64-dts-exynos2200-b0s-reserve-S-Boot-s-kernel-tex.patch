@@ -1,0 +1,34 @@
+From 43ade9b913fb1e7758d72eaa064df59f5b1dbe37 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 18:47:33 +0100
+Subject: [PATCH 22/22] arm64: dts: exynos2200-b0s: reserve S-Boot's kernel
+ text window
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index a87cd8d5c..89bb1d342 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -94,6 +94,15 @@ reserved-memory {
+ 		#size-cells = <2>;
+ 		ranges;
+ 
++		/*
++		 * S-Boot loads uniLoader here and has EL2 protect its first 64 KiB
++		 * from DMA as "kernel text" (see uniLoader SBOOT_TEXT_INFO).
++		 */
++		sboot-kernel-text@80000000 {
++			reg = <0x0 0x80000000 0x0 0x400000>;
++			no-map;
++		};
++
+ 		sgpu_mem: sgpu@8ff00000 {
+ 			reg = <0x0 0x8ff00000 0x0 0xe0000>;
+ 			no-map;
+-- 
+2.56.0
+

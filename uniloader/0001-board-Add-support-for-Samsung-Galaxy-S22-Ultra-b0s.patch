@@ -1,7 +1,7 @@
 From 30f54936fa03251a04784e8a9b730215210c35f3 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 13:05:44 +0100
-Subject: [PATCH] board: Add support for Samsung Galaxy S22 Ultra (b0s)
+Subject: [PATCH 1/2] board: Add support for Samsung Galaxy S22 Ultra (b0s)
 
 The g0s board with the 1440x3088 panel; kernel and ramdisk are placed
 in the clean RAM gap at 0xa8000000/0xb0000000, clear of the stock

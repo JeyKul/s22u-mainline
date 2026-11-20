@@ -1,5 +1,16 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU firmware verify: ruled out more (still 0x5106a)
+- S-Boot kernel text info = [load addr, target of the header's first branch); uniLoader now branches
+  through a trampoline 2 MiB in (SBOOT_TEXT_INFO), load addr varies (0x801f8000, 0x80128000...), DT
+  reserves 0x80000000+4M. EL2 now logs "Protected Kernel text" at boot, BAN_KERNEL_RO returns 0.
+  Verify still fails: not the cause.
+- Also no effect: CryptoManager init SMC 0xc2001031(1) (exynos-cm.ko probe) -> 0; RNG SMC
+  0x82001012; INT 400 MHz. TWRP has no kexec. Modules before sgpu in TWRP that call EL3:
+  chipid, dss, pd_el3, cmupmucal, cpif, gnssif, ssp, cm, el2, s2mpu, sdm, seclog, tzasc, ppmpu,
+  seh, secmem, hdcp2, gpu-profiler, rng, iommu. tzdev loads after sgpu.
+- In TWRP the G3D signature check takes 13 ms; ours fails in ~40 us (EL3 rejects up front).
+
 ## 2026-11-20: GPU firmware: EL3 rejects the signature (open)
 - Firmware = Samsung's unified blob v2.15.1 (tools/extract-gpu-fw.py from unified_firmware_sign.h;
   byte-identical to the one in TWRP's and stock vendor_boot's sgpu.ko). Copied to 0x8ff00000.
