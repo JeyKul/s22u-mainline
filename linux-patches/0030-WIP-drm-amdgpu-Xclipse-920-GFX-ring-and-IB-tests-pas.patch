@@ -1,0 +1,480 @@
+From 7c823ec5ba3d07318fbb36caafb8097eb5fbb3b1 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Fri, 20 Nov 2026 23:19:08 +0100
+Subject: [PATCH 30/30] WIP: drm/amdgpu: Xclipse 920 GFX: ring and IB tests
+ pass
+
+gfx_v10_0 for the Xclipse 920: firmware preloaded by EL3 (only wait for
+RLC autoload), no KIQ (gfx queue mapped by PIO), MEC unhalted before the
+gfx queue (PFP waits for it), no CE/GDS/HDP/SMUIO/golden registers, gfx
+config from sgpu's gpu_info. GMC: GART table in system RAM, walker
+fetches PDE/PTE by physical address, system aperture covers the TMR.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/amdgpu.h           |   1 +
+ drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c        | 161 +++++++++++++++---
+ drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c      |  10 +-
+ drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c        |  15 +-
+ .../gpu/drm/amd/amdgpu/xclipse920_reg_init.c  |  21 ++-
+ drivers/gpu/drm/amd/pm/amdgpu_dpm.c           |   4 +
+ 6 files changed, 180 insertions(+), 32 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu.h b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+index a2ea1ecf0..b5ea9b290 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+@@ -1004,6 +1004,7 @@ static inline bool amdgpu_is_multi_aid(struct amdgpu_device *adev)
+ 
+ /* Samsung Xclipse 920 behind the Exynos 2200 PCI shim (xclipse920_reg_init.c) */
+ extern const struct amdgpu_mmhub_funcs xclipse920_mmhub_funcs;
++#define XCLIPSE920_FB_TOP	0x8fffffffULL	/* carve-out + TMR, 16 MiB granular */
+ static inline bool amdgpu_is_xclipse920(struct amdgpu_device *adev)
+ {
+ 	return IS_ENABLED(CONFIG_PCI_EXYNOS2200_GPU) && adev->asic_type == CHIP_VANGOGH;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+index 00798d804..0f8cd51fb 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+@@ -3914,7 +3914,7 @@ static void gfx_v10_0_init_spm_golden_registers(struct amdgpu_device *adev)
+ 
+ static void gfx_v10_0_init_golden_registers(struct amdgpu_device *adev)
+ {
+-	if (amdgpu_sriov_vf(adev))
++	if (amdgpu_sriov_vf(adev) || amdgpu_is_xclipse920(adev))
+ 		return;
+ 
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+@@ -4447,7 +4447,7 @@ static int gfx_v10_0_mec_init(struct amdgpu_device *adev)
+ 		amdgpu_bo_unreserve(adev->gfx.mec.hpd_eop_obj);
+ 	}
+ 
+-	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT) {
++	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT && !amdgpu_is_xclipse920(adev)) {
+ 		mec_hdr = (const struct gfx_firmware_header_v1_0 *)adev->gfx.mec_fw->data;
+ 
+ 		fw_data = (const __le32 *) (adev->gfx.mec_fw->data +
+@@ -4797,6 +4797,15 @@ static int gfx_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 		adev->gfx.mec.num_queue_per_pipe = 8;
+ 		break;
+ 	}
++	if (amdgpu_is_xclipse920(adev)) {
++		/* sgpu: 4 queues on ME pipe 0, 4 on MEC0 pipe 0 */
++		adev->gfx.me.num_me = 1;
++		adev->gfx.me.num_pipe_per_me = 1;
++		adev->gfx.me.num_queue_per_pipe = 4;
++		adev->gfx.mec.num_mec = 1;
++		adev->gfx.mec.num_pipe_per_mec = 1;
++		adev->gfx.mec.num_queue_per_pipe = 4;
++	}
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+ 	case IP_VERSION(10, 1, 10):
+ 	case IP_VERSION(10, 1, 1):
+@@ -4964,15 +4973,18 @@ static int gfx_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+ 		adev->gfx.gfx_supported_reset |= AMDGPU_RESET_TYPE_PER_QUEUE;
+ 	}
+ 
+-	r = amdgpu_gfx_kiq_init(adev, GFX10_MEC_HPD_SIZE, 0);
+-	if (r) {
+-		DRM_ERROR("Failed to init KIQ BOs!\n");
+-		return r;
+-	}
++	/* the Xclipse 920 CP firmware has no KIQ: queues are mapped by PIO */
++	if (!amdgpu_is_xclipse920(adev)) {
++		r = amdgpu_gfx_kiq_init(adev, GFX10_MEC_HPD_SIZE, 0);
++		if (r) {
++			DRM_ERROR("Failed to init KIQ BOs!\n");
++			return r;
++		}
+ 
+-	r = amdgpu_gfx_kiq_init_ring(adev, xcc_id);
+-	if (r)
+-		return r;
++		r = amdgpu_gfx_kiq_init_ring(adev, xcc_id);
++		if (r)
++			return r;
++	}
+ 
+ 	r = amdgpu_gfx_mqd_sw_init(adev, sizeof(struct v10_compute_mqd), 0);
+ 	if (r)
+@@ -5381,7 +5393,8 @@ static void gfx_v10_0_constants_init(struct amdgpu_device *adev)
+ 	mutex_unlock(&adev->srbm_mutex);
+ 
+ 	gfx_v10_0_init_compute_vmid(adev);
+-	gfx_v10_0_init_gds_vmid(adev);
++	if (!amdgpu_is_xclipse920(adev))
++		gfx_v10_0_init_gds_vmid(adev);
+ 
+ }
+ 
+@@ -5570,7 +5583,15 @@ static int gfx_v10_0_rlc_resume(struct amdgpu_device *adev)
+ {
+ 	int r;
+ 
+-	if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP &&
++	if (amdgpu_is_xclipse920(adev)) {
++		/* RLC autoload was started by EL3 before amdgpu loaded */
++		r = gfx_v10_0_wait_for_rlc_autoload_complete(adev);
++		if (r)
++			return r;
++
++		gfx_v10_0_init_csb(adev);
++		gfx_v10_0_update_spm_vmid_internal(adev, 0xf);
++	} else if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP &&
+ 		adev->psp.autoload_supported) {
+ 
+ 		r = gfx_v10_0_wait_for_rlc_autoload_complete(adev);
+@@ -6087,7 +6108,8 @@ static int gfx_v10_0_cp_gfx_enable(struct amdgpu_device *adev, bool enable)
+ 
+ 	tmp = REG_SET_FIELD(tmp, CP_ME_CNTL, ME_HALT, enable ? 0 : 1);
+ 	tmp = REG_SET_FIELD(tmp, CP_ME_CNTL, PFP_HALT, enable ? 0 : 1);
+-	tmp = REG_SET_FIELD(tmp, CP_ME_CNTL, CE_HALT, enable ? 0 : 1);
++	if (!amdgpu_is_xclipse920(adev))
++		tmp = REG_SET_FIELD(tmp, CP_ME_CNTL, CE_HALT, enable ? 0 : 1);
+ 
+ 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 1, 2))
+ 		WREG32_SOC15_RLC(GC, 0, mmCP_ME_CNTL, tmp);
+@@ -6104,7 +6126,8 @@ static int gfx_v10_0_cp_gfx_enable(struct amdgpu_device *adev, bool enable)
+ 	}
+ 
+ 	if (i >= adev->usec_timeout)
+-		DRM_ERROR("failed to %s cp gfx\n", enable ? "unhalt" : "halt");
++		DRM_ERROR("failed to %s cp gfx (CP_STAT %08x)\n", enable ? "unhalt" : "halt",
++			  RREG32_SOC15(GC, 0, mmCP_STAT));
+ 
+ 	return 0;
+ }
+@@ -6897,6 +6920,45 @@ static int gfx_v10_0_kgq_init_queue(struct amdgpu_ring *ring, bool reset)
+ 	return 0;
+ }
+ 
++/* map a gfx queue by writing its HQD registers from the MQD (no KIQ) */
++static void gfx_v10_0_gfx_queue_init_register(struct amdgpu_ring *ring)
++{
++	struct amdgpu_device *adev = ring->adev;
++	struct v10_gfx_mqd *mqd = ring->mqd_ptr;
++	u32 tmp;
++
++	mutex_lock(&adev->srbm_mutex);
++	nv_grbm_select(adev, ring->me, ring->pipe, ring->queue, 0);
++
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_WPTR, mqd->cp_gfx_hqd_wptr);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_WPTR_HI, mqd->cp_gfx_hqd_wptr_hi);
++	WREG32_SOC15(GC, 0, mmCP_GFX_MQD_BASE_ADDR, mqd->cp_mqd_base_addr);
++	WREG32_SOC15(GC, 0, mmCP_GFX_MQD_BASE_ADDR_HI, mqd->cp_mqd_base_addr_hi);
++	WREG32_SOC15(GC, 0, mmCP_GFX_MQD_CONTROL, mqd->cp_gfx_mqd_control);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_VMID, mqd->cp_gfx_hqd_vmid);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_QUEUE_PRIORITY, mqd->cp_gfx_hqd_queue_priority);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_QUANTUM, mqd->cp_gfx_hqd_quantum);
++
++	tmp = RREG32_SOC15(GC, 0, mmCP_PROCESS_QUANTUM);
++	tmp = REG_SET_FIELD(tmp, CP_PROCESS_QUANTUM, QUANTUM_DURATION, 0x80);
++	tmp = REG_SET_FIELD(tmp, CP_PROCESS_QUANTUM, QUANTUM_EN, 1);
++	tmp = REG_SET_FIELD(tmp, CP_PROCESS_QUANTUM, QUANTUM_SCALE, 2);
++	WREG32_SOC15(GC, 0, mmCP_PROCESS_QUANTUM, tmp);
++
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_BASE, mqd->cp_gfx_hqd_base);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_BASE_HI, mqd->cp_gfx_hqd_base_hi);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_RPTR_ADDR, mqd->cp_gfx_hqd_rptr_addr);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_RPTR_ADDR_HI, mqd->cp_gfx_hqd_rptr_addr_hi);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_CNTL, mqd->cp_gfx_hqd_cntl);
++	WREG32_SOC15(GC, 0, mmCP_RB_WPTR_POLL_ADDR_LO, mqd->cp_rb_wptr_poll_addr_lo);
++	WREG32_SOC15(GC, 0, mmCP_RB_WPTR_POLL_ADDR_HI, mqd->cp_rb_wptr_poll_addr_hi);
++	WREG32_SOC15(GC, 0, mmCP_RB_DOORBELL_CONTROL, mqd->cp_rb_doorbell_control);
++	WREG32_SOC15(GC, 0, mmCP_GFX_HQD_ACTIVE, mqd->cp_gfx_hqd_active);
++
++	nv_grbm_select(adev, 0, 0, 0, 0);
++	mutex_unlock(&adev->srbm_mutex);
++}
++
+ static int gfx_v10_0_cp_async_gfx_ring_resume(struct amdgpu_device *adev)
+ {
+ 	int r, i;
+@@ -6907,9 +6969,14 @@ static int gfx_v10_0_cp_async_gfx_ring_resume(struct amdgpu_device *adev)
+ 			return r;
+ 	}
+ 
+-	r = amdgpu_gfx_enable_kgq(adev, 0);
+-	if (r)
+-		return r;
++	if (amdgpu_is_xclipse920(adev)) {
++		for (i = 0; i < adev->gfx.num_gfx_rings; i++)
++			gfx_v10_0_gfx_queue_init_register(&adev->gfx.gfx_ring[i]);
++	} else {
++		r = amdgpu_gfx_enable_kgq(adev, 0);
++		if (r)
++			return r;
++	}
+ 
+ 	return gfx_v10_0_cp_gfx_start(adev);
+ }
+@@ -7242,7 +7309,8 @@ static int gfx_v10_0_cp_resume(struct amdgpu_device *adev)
+ 	if (!(adev->flags & AMD_IS_APU))
+ 		gfx_v10_0_enable_gui_idle_interrupt(adev, false);
+ 
+-	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT) {
++	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT &&
++	    !amdgpu_is_xclipse920(adev)) {
+ 		/* legacy firmware loading */
+ 		r = gfx_v10_0_cp_gfx_load_microcode(adev);
+ 		if (r)
+@@ -7253,13 +7321,21 @@ static int gfx_v10_0_cp_resume(struct amdgpu_device *adev)
+ 			return r;
+ 	}
+ 
+-	r = gfx_v10_0_kiq_resume(adev);
+-	if (r)
+-		return r;
++	/*
++	 * Xclipse 920: no KIQ; compute queues not mapped yet. The PFP waits
++	 * for the MEC after unhalt, so the MEC must run before the gfx queue.
++	 */
++	if (amdgpu_is_xclipse920(adev)) {
++		gfx_v10_0_cp_compute_enable(adev, true);
++	} else {
++		r = gfx_v10_0_kiq_resume(adev);
++		if (r)
++			return r;
+ 
+-	r = gfx_v10_0_kcq_resume(adev);
+-	if (r)
+-		return r;
++		r = gfx_v10_0_kcq_resume(adev);
++		if (r)
++			return r;
++	}
+ 
+ 	if (!amdgpu_async_gfx_ring) {
+ 		r = gfx_v10_0_cp_gfx_resume(adev);
+@@ -7499,7 +7575,8 @@ static int gfx_v10_0_hw_init(struct amdgpu_ip_block *ip_block)
+ 	amdgpu_gfx_cleaner_shader_init(adev, adev->gfx.cleaner_shader_size,
+ 				       adev->gfx.cleaner_shader_ptr);
+ 
+-	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT) {
++	if (adev->firmware.load_type == AMDGPU_FW_LOAD_DIRECT &&
++	    !amdgpu_is_xclipse920(adev)) {
+ 		/**
+ 		 * For gfx 10, rlc firmware loading relies on smu firmware is
+ 		 * loaded firstly, so in direct type, it has to load smc ucode
+@@ -7578,7 +7655,7 @@ static int gfx_v10_0_hw_fini(struct amdgpu_ip_block *ip_block)
+ 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 3, 1))
+ 		gfx_v10_0_set_powergating_state(ip_block, AMD_PG_STATE_UNGATE);
+ 
+-	if (!adev->no_hw_access) {
++	if (!adev->no_hw_access && !amdgpu_is_xclipse920(adev)) {
+ 		if (amdgpu_async_gfx_ring) {
+ 			if (amdgpu_gfx_disable_kgq(adev, 0))
+ 				DRM_ERROR("KGQ disable failed\n");
+@@ -7724,6 +7801,16 @@ static uint64_t gfx_v10_0_get_gpu_clock_counter(struct amdgpu_device *adev)
+ {
+ 	uint64_t clock, clock_lo, clock_hi, hi_check;
+ 
++	if (amdgpu_is_xclipse920(adev)) {
++		/* no SMUIO: RLC's counter, as sgpu does */
++		mutex_lock(&adev->gfx.gpu_clock_mutex);
++		WREG32_SOC15(GC, 0, mmRLC_CAPTURE_GPU_CLOCK_COUNT, 1);
++		clock = (uint64_t)RREG32_SOC15(GC, 0, mmRLC_GPU_CLOCK_COUNT_LSB) |
++			((uint64_t)RREG32_SOC15(GC, 0, mmRLC_GPU_CLOCK_COUNT_MSB) << 32ULL);
++		mutex_unlock(&adev->gfx.gpu_clock_mutex);
++		return clock;
++	}
++
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+ 	case IP_VERSION(10, 1, 3):
+ 	case IP_VERSION(10, 1, 4):
+@@ -7800,6 +7887,10 @@ static void gfx_v10_0_ring_emit_gds_switch(struct amdgpu_ring *ring,
+ {
+ 	struct amdgpu_device *adev = ring->adev;
+ 
++	/* no GDS/GWS/OA on the Xclipse 920 */
++	if (amdgpu_is_xclipse920(adev))
++		return;
++
+ 	/* GDS Base */
+ 	gfx_v10_0_write_data_to_reg(ring, 0, false,
+ 				    SOC15_REG_OFFSET(GC, 0, mmGDS_VMID0_BASE) + 2 * vmid,
+@@ -7851,6 +7942,11 @@ static int gfx_v10_0_early_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	adev->gfx.num_compute_rings = min(amdgpu_gfx_get_num_kcq(adev),
+ 					  AMDGPU_MAX_COMPUTE_RINGS);
++	if (amdgpu_is_xclipse920(adev)) {
++		/* bring-up: one gfx queue, no compute (KCQ PIO map todo) */
++		adev->gfx.num_gfx_rings = 1;
++		adev->gfx.num_compute_rings = 0;
++	}
+ 
+ 	gfx_v10_0_set_kiq_pm4_funcs(adev);
+ 	gfx_v10_0_set_ring_funcs(adev);
+@@ -7864,6 +7960,12 @@ static int gfx_v10_0_early_init(struct amdgpu_ip_block *ip_block)
+ 
+ 	amdgpu_init_rlc_reg_funcs(adev);
+ 
++	if (amdgpu_is_xclipse920(adev)) {
++		/* firmware preloaded; WAIT_REG_MEM write+wait works (sgpu) */
++		adev->gfx.cp_fw_write_wait = true;
++		return 0;
++	}
++
+ 	return gfx_v10_0_init_microcode(adev);
+ }
+ 
+@@ -8451,7 +8553,7 @@ static int gfx_v10_0_set_powergating_state(struct amdgpu_ip_block *ip_block,
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 	bool enable = (state == AMD_PG_STATE_GATE);
+ 
+-	if (amdgpu_sriov_vf(adev))
++	if (amdgpu_sriov_vf(adev) || amdgpu_is_xclipse920(adev))
+ 		return 0;
+ 
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+@@ -8488,7 +8590,7 @@ static int gfx_v10_0_set_clockgating_state(struct amdgpu_ip_block *ip_block,
+ {
+ 	struct amdgpu_device *adev = ip_block->adev;
+ 
+-	if (amdgpu_sriov_vf(adev))
++	if (amdgpu_sriov_vf(adev) || amdgpu_is_xclipse920(adev))
+ 		return 0;
+ 
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+@@ -8634,6 +8736,9 @@ static void gfx_v10_0_ring_emit_hdp_flush(struct amdgpu_ring *ring)
+ 	struct amdgpu_device *adev = ring->adev;
+ 	u32 ref_and_mask, reg_mem_engine;
+ 
++	if (amdgpu_is_xclipse920(adev))
++		return;
++
+ 	if (!adev->gfx.funcs->get_hdp_flush_mask) {
+ 		dev_err(adev->dev, "%s: gfx hdp flush is not supported.\n", __func__);
+ 		return;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c b/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
+index 30b90d35a..fb097f88b 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
+@@ -245,11 +245,17 @@ static void gfxhub_v2_1_init_cache_regs(struct amdgpu_device *adev)
+ 		tmp = REG_SET_FIELD(tmp, GCVM_L2_CNTL3,
+ 				    L2_CACHE_BIGK_FRAGMENT_SIZE, 6);
+ 	}
++	/* Xclipse 920: sgpu's value */
++	if (amdgpu_is_xclipse920(adev))
++		tmp = 0x00100003;
+ 	WREG32_SOC15(GC, 0, mmGCVM_L2_CNTL3, tmp);
+ 
++	/* page tables in system RAM: the walker fetches them by physical address */
+ 	tmp = mmGCVM_L2_CNTL4_DEFAULT;
+-	tmp = REG_SET_FIELD(tmp, GCVM_L2_CNTL4, VMC_TAP_PDE_REQUEST_PHYSICAL, 0);
+-	tmp = REG_SET_FIELD(tmp, GCVM_L2_CNTL4, VMC_TAP_PTE_REQUEST_PHYSICAL, 0);
++	tmp = REG_SET_FIELD(tmp, GCVM_L2_CNTL4, VMC_TAP_PDE_REQUEST_PHYSICAL,
++			    amdgpu_is_xclipse920(adev));
++	tmp = REG_SET_FIELD(tmp, GCVM_L2_CNTL4, VMC_TAP_PTE_REQUEST_PHYSICAL,
++			    amdgpu_is_xclipse920(adev));
+ 	WREG32_SOC15(GC, 0, mmGCVM_L2_CNTL4, tmp);
+ 
+ 	tmp = mmGCVM_L2_CNTL5_DEFAULT;
+diff --git a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+index dc73e10fc..73ee4a708 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gmc_v10_0.c
+@@ -663,6 +663,12 @@ static void gmc_v10_0_vram_gtt_location(struct amdgpu_device *adev,
+ 
+ 	amdgpu_gmc_set_agp_default(adev, mc);
+ 	amdgpu_gmc_vram_location(adev, &adev->gmc, base);
++	/*
++	 * Xclipse 920: the CP/RLC fetch their ucode from the TMR above the
++	 * carve-out; keep it inside the system aperture
++	 */
++	if (amdgpu_is_xclipse920(adev))
++		mc->fb_end = XCLIPSE920_FB_TOP;
+ 	amdgpu_gmc_gart_location(adev, mc, AMDGPU_GART_PLACEMENT_BEST_FIT);
+ 	if (!amdgpu_sriov_vf(adev) && (amdgpu_agp == 1))
+ 		amdgpu_gmc_agp_location(adev, mc);
+@@ -752,6 +758,10 @@ static int gmc_v10_0_gart_init(struct amdgpu_device *adev)
+ 	adev->gart.gart_pte_flags = AMDGPU_PTE_MTYPE_NV10(0ULL, MTYPE_UC) |
+ 				 AMDGPU_PTE_EXECUTABLE;
+ 
++	/* Xclipse 920: the GPU walks page tables in system RAM only (sgpu) */
++	if (amdgpu_is_xclipse920(adev))
++		return amdgpu_gart_table_ram_alloc(adev);
++
+ 	return amdgpu_gart_table_vram_alloc(adev);
+ }
+ 
+@@ -907,7 +917,10 @@ static int gmc_v10_0_sw_init(struct amdgpu_ip_block *ip_block)
+  */
+ static void gmc_v10_0_gart_fini(struct amdgpu_device *adev)
+ {
+-	amdgpu_gart_table_vram_free(adev);
++	if (amdgpu_is_xclipse920(adev))
++		amdgpu_gart_table_ram_free(adev);
++	else
++		amdgpu_gart_table_vram_free(adev);
+ }
+ 
+ static int gmc_v10_0_sw_fini(struct amdgpu_ip_block *ip_block)
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+index 72b5e474f..1c1d0e595 100644
+--- a/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_reg_init.c
+@@ -18,12 +18,12 @@
+ #include "nv.h"
+ #include "nbio_v2_3.h"
+ #include "gmc_v10_0.h"
++#include "gfx_v10_0.h"
+ #include "soc15_common.h"
+ 
+ #include "gc/gc_10_3_0_offset.h"
+ 
+ #define XCLIPSE920_FB_BASE	0x88000000ULL
+-#define XCLIPSE920_FB_TOP	0x8fffffffULL	/* incl. TMR, 16 MiB granular */
+ #define XCLIPSE920_VRAM_SIZE	(0x8ff00000ULL - XCLIPSE920_FB_BASE)
+ 
+ /* segment bases of instance 0; the other instances do not exist */
+@@ -132,6 +132,24 @@ int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
+ 	}
+ 	adev->ip_versions[GC_HWIP][0] = IP_VERSION(10, 3, 1);
+ 	adev->ip_versions[NBIO_HWIP][0] = IP_VERSION(2, 3, 0);
++	/* no IP discovery: sgpu's built-in gpu_info (vangogh_lite_gpu_info.h) */
++	adev->gfx.config.max_shader_engines = 1;
++	adev->gfx.config.max_sh_per_se = 1;
++	adev->gfx.config.max_cu_per_sh = 6;
++	adev->gfx.config.max_backends_per_se = 3;
++	adev->gfx.config.max_texture_channel_caches = 4;
++	adev->gfx.config.max_gprs = 1024;
++	adev->gfx.config.max_gs_threads = 32;
++	adev->gfx.config.gs_vgt_table_depth = 32;
++	adev->gfx.config.gs_prim_buffer_depth = 1792;
++	adev->gfx.config.double_offchip_lds_buf = 1;
++	adev->gfx.config.num_sc_per_sh = 1;
++	adev->gfx.config.num_packer_per_sc = 3;
++	adev->gfx.cu_info.wave_front_size = 32;
++	adev->gfx.cu_info.max_waves_per_simd = 16;
++	adev->gfx.cu_info.max_scratch_slots_per_cu = 32;
++	adev->gfx.cu_info.lds_size = 64;
++
+ 	/* not AMD_APU_IS_VANGOGH: none of Van Gogh's SMU/VCN quirks apply */
+ 	adev->family = AMDGPU_FAMILY_VGH;
+ 
+@@ -155,5 +173,6 @@ int xclipse920_set_ip_blocks(struct amdgpu_device *adev)
+ 	amdgpu_device_ip_block_add(adev, &nv_common_ip_block);
+ 	amdgpu_device_ip_block_add(adev, &gmc_v10_0_ip_block);
+ 	amdgpu_device_ip_block_add(adev, &xclipse920_ih_ip_block);
++	amdgpu_device_ip_block_add(adev, &gfx_v10_0_ip_block);
+ 	return 0;
+ }
+diff --git a/drivers/gpu/drm/amd/pm/amdgpu_dpm.c b/drivers/gpu/drm/amd/pm/amdgpu_dpm.c
+index 808be6c42..f2d536723 100644
+--- a/drivers/gpu/drm/amd/pm/amdgpu_dpm.c
++++ b/drivers/gpu/drm/amd/pm/amdgpu_dpm.c
+@@ -1697,6 +1697,10 @@ int amdgpu_dpm_is_overdrive_supported(struct amdgpu_device *adev)
+ 
+ int amdgpu_dpm_is_overdrive_enabled(struct amdgpu_device *adev)
+ {
++	/* no power management at all (e.g. no SMU on the Xclipse 920) */
++	if (!adev->powerplay.pp_handle)
++		return false;
++
+ 	if (is_support_sw_smu(adev)) {
+ 		struct smu_context *smu = adev->powerplay.pp_handle;
+ 
+-- 
+2.56.0
+
