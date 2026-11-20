@@ -7,20 +7,54 @@ Xclipse 920 GPU (AMD RDNA2, "Vangogh lite"), 1440x3088 OLED.
 > Early bring-up. Needs an unlocked bootloader and TWRP. Only the `boot`
 > partition is written; recovery stays TWRP, so the way back is always there.
 
-## Status (2026-11-20)
+## Status
 
-| | |
-|---|---|
-| Boot: S-Boot → uniLoader → Linux | **works**, initramfs in 0.38 s |
-| CPUs | **8/8** (PSCI over smc) |
-| RAM | **11 GB** usable (all 8 banks, stock carve-outs kept out) |
-| Display | **simpledrm** on the boot framebuffer, kernel log on screen from the first line |
-| USB gadget | **works**: ACM serial shell, NCM network |
-| Back to TWRP | **works**: `twrp`, `reboot recovery`, or hold Volume Up 2 s |
-| UFS (userdata as root) | patches in, not wired up yet |
-| PMIC, keys other than Vol Up, battery | not yet |
-| GPU (Xclipse 920) | planned: amdgpu, gfx10.3 (Samsung's sgpu is an amdgpu fork) |
-| Wi-Fi, BT, audio, modem, cameras | not yet |
+Key: ✅ working, 🟡 partial, ❌ not working, ⬜ not started. **Goal** marks the
+minimum target: GPU, display, HDMI.
+
+### Core
+
+| Hardware | State | Notes |
+|---|---|---|
+| Boot: S-Boot → uniLoader → Linux v7.3 | ✅ | initramfs in 0.3 s; kernel log on the panel from the first line |
+| CPUs: 4x A510, 3x A710, 1x X2 | ✅ | 8/8 up (PSCI over smc). Needs `arm64.nomte arm64.nosve arm64.nompam` (EL2 traps them) |
+| CPU frequency (DVFS) | ⬜ | ACPM DVFS; mainline has `exynos-acpm-dvfs` (gs101) to adapt |
+| RAM | ✅ | 11 GB usable; all stock carve-outs kept out |
+| Storage: UFS 3.1 | 🟡 | Exynos 2200 UFS patches in; DT node and FMP setup next |
+| Rootfs on userdata | ⬜ | After UFS: Arch Linux ARM, the whole 463 GB |
+| PMIC: S2MPS25/S2MPS26 (via ACPM) | ⬜ | Mainline `exynos-acpm` + `exynos-acpm-pmic` (gs101) to adapt. Unblocks regulators, power/vol-down keys, RTC |
+| Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
+| Thermal (TMU) | ⬜ | `exynos-acpm-tmu` |
+| Watchdog | ⬜ | uniLoader turns it off |
+| Back to TWRP | ✅ | `twrp`, `reboot recovery`, Volume Up held 2 s |
+| Volume Up | ✅ | GPIO key |
+| Power, Volume Down | ⬜ | PMIC keys |
+| Battery, charging: MAX77705 + fuel gauge | ⬜ | S2MPS charger path; same MAX77705 as the Tab S7+ |
+| Vibration | ⬜ | |
+| Suspend | ⬜ | |
+
+### Display and graphics
+
+| Hardware | State | Notes |
+|---|---|---|
+| **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | simpledrm on S-Boot's framebuffer works. Native: DECON (DPU) + DSIM DRM driver + panel driver, then 120 Hz |
+| Brightness | ⬜ | Panel DCS, needs the native driver |
+| **Goal** GPU: Xclipse 920 (AMD RDNA2, gfx10.3 "Vangogh lite") | ⬜ | Samsung's `sgpu` is an amdgpu fork; plan: amdgpu with the Exynos glue (power domain, ACPM DVFS, firmware load via EL2), Mesa RADV/radeonsi. First blocker found on XNU: ACPM DVFS before the first G3D access |
+| **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
+| Video decode/encode (MFC) | ⬜ | |
+| Touchscreen: STM FTS on SPI | ⬜ | Rails, pins and clocks known from the XNU port |
+| S Pen (Wacom) | ⬜ | |
+| Fingerprint (ultrasonic) | ⬜ | Probably TrustZone-only |
+
+### USB, audio, connectivity
+
+| Hardware | State | Notes |
+|---|---|---|
+| USB gadget (serial, network) | ✅ | ACM shell works; NCM link up, needs a busybox with telnetd/udhcpd |
+| USB 3, USB host (OTG) | ⬜ | hacen's USBDP patches; role switch from MAX77705 |
+| Audio: CS35L41 speakers, ABOX DSP | ⬜ | |
+| Wi-Fi / BT: Broadcom BCM4389 (PCIe) | ⬜ | brcmfmac candidate |
+| Modem, GNSS, NFC, cameras, sensors | ⬜ | |
 
 ## How it boots
 
