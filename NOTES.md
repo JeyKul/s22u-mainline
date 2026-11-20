@@ -17,6 +17,9 @@
   +256K) + fb text console (8x16 x2). src/twrp-b0slog dumps it from TWRP (/sys/kernel/b0slog/{0,1}).
   After a Power+VolDown forced reset the RAM log was badly bit-decayed: unreadable.
 - build-twrp/Module.symvers: CRCs of all 3474 symbols TWRP's own modules import, added.
+- fb text console via the linear map (fb memblock_reserve'd, __flush_dcache_area per glyph) works.
+  Samsung kernel boots to kernel_init, then panics "VFS: Unable to mount root fs on
+  unknown-block(0,0)": our ramdisk's /init never shows up (initramfs not unpacked?).
 
 ## 2026-11-20: GPU round 2, PATH 1 (fresh EL3 oracle in TWRP): blocked
 - src/twrp-g3dflip (TWRP module; memremap/memunmap CRCs from TWRP's sgpu.ko added to
