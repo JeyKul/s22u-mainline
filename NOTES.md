@@ -36,7 +36,9 @@
   type 1. Pre-signature routine 0x7ff8: type 2 skips, type != 2 reads the region's stage-2
   attribute (0xc85c); type 1 keeps the region mapped with a rewritten attribute (bit 7 set, 7-8
   cleared) via 0xc5bc, type 0 unmaps it ("Fail to unmap FW region from MMU Stage 2").
-- S-Boot only prints "TZ_GPU: %d" from a debug block at 0x900541e4 (no decision there).
+- S-Boot "TZ_GPU: %d" (epbl 0x136b30) is a thermal zone, not TrustZone: block "Kernel last
+  temperature" prints TZ_BIG/MID/LIT/GPU/ISP/NPU/CP from words at 0x900541e4.. (the previous
+  kernel's last readings). Nothing to compare between TWRP and mainline boots.
 - Panel: blank with `echo 28 > /sys/kernel/debug/exynos2200-dsim-dcs` (29 = on) to avoid burn-in.
 
 ## 2026-11-20: GPU firmware verify: TEST B1 (Samsung kernel from boot) inconclusive, paused
