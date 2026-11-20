@@ -1,5 +1,19 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-20: GPU milestone 3: SMC/HVC trace of Samsung's kernel (G3D verify passes)
+- ref/xt-kernel b0s-direct: arch/arm64/kernel/b0s-smc-trace.c wraps __arm_smccc_{smc,hvc} (asm renamed
+  __b0s_arm_smccc_*), static 16384-entry record from the first call, PSCI only counted;
+  /proc/b0s_smc, dumped by xtinit. logs/xt-smc-trace.txt (not committed).
+- 865 calls by the end, 118 before sgpu's verify, which is: 82000410(1,16c10204,2) -> 0x27 (G3D PD
+  restore), then c6000110(7,8ff00000,dc000,e0000) 17.4 ms, then c6000111(7) REQUEST_FW_STAGE2_AP,
+  82000520(0) RLC boot. Before it only: PSCI_VERSION, chipid SFR reads, dss SJTAG status,
+  c6000104 BAN_KERNEL_RO, c6000109 GET_S2MPU_PD_BITMAP, c6000601 S2MPUFD init, cmupmucal SFR reads,
+  and PD on/off pairs (82000410 + c6000108 BACKUP_RESTORE_S2MPU per PD; none for G3D 0x27).
+- AFTER the verify (idx 122+): SET_DEBUG_MEM (-120), CM init c2001031(1)/(2), c6000040 EL2 crash
+  buf, **c6000041 SET_EL2_LV3_TABLE_BUF (0x89d400000, 4M)**, c6000042, c6000020, seclog 82000610,
+  tzasc, ppmpu, secmem, RNG. Mainline always did c6000041 (`el2`) BEFORE the verify.
+- Next (mainline boot): s2mpufd, fw, without el2 (no LV3 table yet).
+
 ## 2026-11-20: GPU round 2, PATH 2: Samsung kernel from source, direct boot
 - ExtremeXT tree (ref/xt-kernel, branch b0s-direct): s5e9925_defconfig + b0s.config, WERROR off,
   -Wno-error, bcmdhd -Werror dropped, DEBUG_FS on, CMUCAL_DEBUG off (=m breaks modpost).
