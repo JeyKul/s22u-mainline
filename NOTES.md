@@ -1,5 +1,22 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-21: gfx11 code runs; compute via Mesa works; draws still hang
+- tools/gpurun.c (raw compute dispatch, libdrm_amdgpu) + tools/isa/*.s (llvm-mc -mcpu=gfx1100,
+  tools/isa/asm.sh): gfx11 stores/atomics/s_delay_alu/s_clause/dealloc_vgprs all work; thread IDs
+  unpacked (gfx10-style), user SGPRs as gfx10.3. Buffer descriptors must be gfx10.3 format
+  (gfx11-format V# writes nothing).
+- Mesa 26.3 hacks (src/mesa, local, ACO_XCLIPSE=1, build on phone -> /opt/mesa-xc):
+  ACO targets GFX11 (options + program), exp valid_mask bit 12 kept, has_ngg_passthru_no_msg,
+  NGG workgroup 64, no late alloc, XCLIPSE_DUMP (shader binaries to /tmp), XCLIPSE_REGS (register
+  overrides before each draw). glcomp (GLES compute): PASS (256/256 stores, atomics count right).
+- Samsung's own gfx1040 pipelines: 1162 embedded ELFs in vendor vulkan.samsung.so (mach 0xf6-0xfe),
+  PAL metadata has full register lists (decoded vs Mesa gfx103.json). Samsung shaders: no s_sendmsg
+  at all, PS exports done+vm, m0 = prim_mask & 0x7fffff00, NGG subgroup 64, late alloc 0.
+- Draws: still SPI/PA/GE/SX busy, no live waves (scanner validated with a spinning wave).
+- GPU clock: ~309 MHz measured (SHADER_CYCLES vs REALTIME) = stock min_freq 302 MHz; no DVFS yet.
+- Safety: tools/gpu-down.sh (halt CP/MEC, gIH off) before every reboot; tools/gpu-up.sh refuses to
+  run twice (second s2mpufd = 0x711, second fw boot under live amdgpu corrupted the system once).
+
 ## 2026-11-21: ROOT CAUSE of the draw hang: Xclipse 920 shaders are gfx11 (RDNA3) ISA
 - Samsung's stack calls the target gfx1040 ("VANGOGHLITE_EVT1:gfx1040" in vendor vulkan.samsung.so).
 - sgpu's trap handler for VANGOGH_LITE (cwsr_trap_m0_hex, source cwsr_trap_handler_m0.sp3) is
