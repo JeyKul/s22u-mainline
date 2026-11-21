@@ -41,7 +41,7 @@ minimum target: GPU, display, HDMI.
 |---|---|---|
 | **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | simpledrm on S-Boot's framebuffer; DSIM taken over (commands work). Next: DECON/DPP DRM driver (page flip, vblank), blanking, 120 Hz |
 | Brightness | ✅ | `/sys/class/backlight/panel` (0-2039, DCS 51h): DSIM re-initialised with Samsung's cal so commands reach the panel |
-| **Goal** GPU: Xclipse 920 (AMD RDNA2, gfx10.3 "Vangogh lite") | 🟡 | Powers on and answers MMIO (`GRBM_CHIP_REVISION` 0x00600201 = MGFX0 EVT1.1). Next: firmware (EL2-verified), amdgpu glue, Mesa |
+| **Goal** GPU: Xclipse 920 (RDNA2-style GC 10.3 regs, **gfx11 shader ISA** "gfx1040") | 🟡 | Mainline amdgpu: init, GFX ring + IB tests pass. Mesa (mesa-patches/, ACO emits gfx11): compute works; draws still hang before the VS runs. See NOTES.md |
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
 | Video decode/encode (MFC) | ⬜ | |
 | Touchscreen: STM FTS2BA61Y on SPI2 | ✅ | Multitouch (`stm-fts-spi`, new driver); rails from the PMIC. SPI needs `fifo-depth = <256>` (USI02) |
