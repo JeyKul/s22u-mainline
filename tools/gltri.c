@@ -4,7 +4,8 @@
 // Run: ./gltri [/dev/dri/renderD128] [frames] [out.ppm]
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <GLES2/gl2.h>
+#include <GLES3/gl31.h>
+#include <GLES2/gl2ext.h>
 #include <gbm.h>
 #include <fcntl.h>
 #include <math.h>
@@ -17,12 +18,16 @@
 #define H 512
 
 static const char *vs =
-	"attribute vec2 p; attribute vec3 c; varying vec3 v; uniform float a;\n"
-	"void main() { float s = sin(a), k = cos(a);\n"
+	"#version 310 es\n"
+	"layout(location = 0) in vec2 p; layout(location = 1) in vec3 c; out vec3 v; uniform float a;\n"
+	"layout(std430, binding = 0) buffer B { uint cnt[]; };\n"
+	"void main() { atomicAdd(cnt[0], 1u); float s = sin(a), k = cos(a);\n"
 	"  gl_Position = vec4(k * p.x - s * p.y, s * p.x + k * p.y, 0.0, 1.0); v = c; }\n";
 static const char *fs =
-	"precision mediump float; varying vec3 v;\n"
-	"void main() { gl_FragColor = vec4(v, 1.0); }\n";
+	"#version 310 es\n"
+	"precision mediump float; in vec3 v; out vec4 o;\n"
+	"layout(std430, binding = 0) buffer B { uint cnt[]; };\n"
+	"void main() { atomicAdd(cnt[1], 1u); o = vec4(v, 1.0); }\n";
 
 static GLuint shader(GLenum type, const char *src)
 {
@@ -68,8 +73,8 @@ int main(int argc, char **argv)
 	struct gbm_device *gbm = gbm_create_device(fd);
 	EGLDisplay dpy = eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, gbm, NULL);
 	if (!eglInitialize(dpy, &major, &minor)) { fprintf(stderr, "eglInitialize failed\n"); return 1; }
-	static const EGLint ca[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_SURFACE_TYPE, 0, EGL_NONE };
-	static const EGLint xa[] = { EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE };
+	static const EGLint ca[] = { EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, 0, EGL_NONE };
+	static const EGLint xa[] = { EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 1, EGL_NONE };
 	eglBindAPI(EGL_OPENGL_ES_API);
 	if (!eglChooseConfig(dpy, ca, &cfg, 1, &n) || !n) { fprintf(stderr, "no config\n"); return 1; }
 	EGLContext ctx = eglCreateContext(dpy, cfg, EGL_NO_CONTEXT, xa);
@@ -97,6 +102,31 @@ int main(int argc, char **argv)
 	glEnableVertexAttribArray(0);
 	glEnableVertexAttribArray(1);
 	glViewport(0, 0, W, H);
+	GLuint sb;
+	glGenBuffers(1, &sb);
+	glBindBuffer(GL_SHADER_STORAGE_BUFFER, sb);
+	PFNGLBUFFERSTORAGEEXTPROC bs = (PFNGLBUFFERSTORAGEEXTPROC)eglGetProcAddress("glBufferStorageEXT");
+	const GLbitfield pf = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT;
+	bs(GL_SHADER_STORAGE_BUFFER, 16, NULL, pf);
+	volatile unsigned *cnt = glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, 16, pf);
+	cnt[0] = cnt[1] = 0;
+	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, sb);
+	if (getenv("GLTRI_PROBE")) {
+		if (!getenv("GLTRI_NOCLEAR")) {
+			glClearColor(0.1f, 0.1f, 0.15f, 1);
+			glClear(GL_COLOR_BUFFER_BIT);
+		}
+		printf("clear issued\n");
+		glUniform1f(ua, 0);
+		if (!getenv("GLTRI_NODRAW"))
+			glDrawArrays(GL_TRIANGLES, 0, 3);
+		printf("draw issued\n");
+		glFlush();
+		printf("flushed\n");
+		sleep(2);
+		printf("after 2 s: VS invocations %u, FS invocations %u\n", cnt[0], cnt[1]);
+		return 0;
+	}
 
 	t0 = now();
 	for (i = 0; i < frames; i++) {

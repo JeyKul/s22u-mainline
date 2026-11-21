@@ -1,0 +1,255 @@
+Xclipse 920 experiments on Mesa 26.3 (branch 26.3, f367ac0). Env-gated: ACO_XCLIPSE=1,
+XCLIPSE_DUMP=1, XCLIPSE_REGS=reg=val,... Apply: git -C mesa apply xclipse920.diff
+Build: see NOTES.md. Generated-by: LLM
+
+diff --git a/src/amd/common/ac_gpu_info.c b/src/amd/common/ac_gpu_info.c
+index aae6e0b..04646cd 100644
+--- a/src/amd/common/ac_gpu_info.c
++++ b/src/amd/common/ac_gpu_info.c
+@@ -346,6 +346,8 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
+     * PRIMGEN_PASSTHRU_NO_MSG.
+     */
+    out->has_ngg_passthru_no_msg = info->family >= CHIP_NAVI23;
++   if (getenv("ACO_XCLIPSE"))
++      out->has_ngg_passthru_no_msg = true;
+ 
+    out->local_invocation_ids_packed =
+       info->gfx_level >= GFX11 || (!info->has_graphics && info->family >= CHIP_MI200);
+diff --git a/src/amd/common/ac_shader_util.c b/src/amd/common/ac_shader_util.c
+index 656ec9f..f6dc423 100644
+--- a/src/amd/common/ac_shader_util.c
++++ b/src/amd/common/ac_shader_util.c
+@@ -1,3 +1,4 @@
++#include <stdlib.h>
+ /*
+  * Copyright 2012 Advanced Micro Devices, Inc.
+  *
+@@ -792,6 +793,9 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
+    /* This should never be called on gfx12. Gfx12 doesn't need to mask CUs for late alloc. */
+    assert(info->gfx_level < GFX12);
+ 
++   if (getenv("ACO_XCLIPSE"))
++      return;
++
+    /* CU masking can decrease performance and cause a hang with <= 2 CUs per SA. */
+    if (info->min_good_cu_per_sa <= 2)
+       return;
+diff --git a/src/amd/compiler/aco_assembler.cpp b/src/amd/compiler/aco_assembler.cpp
+index bdfa155..c62edf0 100644
+--- a/src/amd/compiler/aco_assembler.cpp
++++ b/src/amd/compiler/aco_assembler.cpp
+@@ -7,6 +7,7 @@
+ #include "aco_builder.h"
+ #include "aco_interface.h"
+ #include "aco_ir.h"
++#include "util/u_debug.h"
+ 
+ #include "common/amdgfxregs.h"
+ 
+@@ -998,6 +999,8 @@ emit_exp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruc
+ 
+    if (ctx.gfx_level >= GFX11) {
+       encoding |= exp.row_en ? 0b1 << 13 : 0;
++      if (debug_get_bool_option("ACO_XCLIPSE", false))
++         encoding |= exp.valid_mask ? 0b1 << 12 : 0;
+    } else {
+       encoding |= exp.valid_mask ? 0b1 << 12 : 0;
+       encoding |= exp.compressed ? 0b1 << 10 : 0;
+diff --git a/src/amd/compiler/aco_interface.cpp b/src/amd/compiler/aco_interface.cpp
+index e6dae47..cf0c845 100644
+--- a/src/amd/compiler/aco_interface.cpp
++++ b/src/amd/compiler/aco_interface.cpp
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "aco_interface.h"
++#include "util/u_debug.h"
+ 
+ #include "aco_ir.h"
+ 
+@@ -243,11 +244,23 @@ aco_compile_shader_part(const struct aco_compiler_options* options,
+ 
+ } /* end namespace */
+ 
++static const struct aco_compiler_options*
++xclipse_options(const struct aco_compiler_options* options, struct aco_compiler_options* tmp)
++{
++   if (!debug_get_bool_option("ACO_XCLIPSE", false))
++      return options;
++   *tmp = *options;
++   tmp->gfx_level = GFX11;
++   return tmp;
++}
++
+ void
+-aco_compile_shader(const struct aco_compiler_options* options, const struct aco_shader_info* info,
++aco_compile_shader(const struct aco_compiler_options* options_in, const struct aco_shader_info* info,
+                    unsigned shader_count, struct nir_shader* const* shaders,
+                    const struct ac_shader_args* args, aco_callback* build_binary, void** binary)
+ {
++   struct aco_compiler_options xclipse_tmp;
++   const struct aco_compiler_options* options = xclipse_options(options_in, &xclipse_tmp);
+    init();
+ 
+    ac_shader_config config = {0};
+@@ -269,10 +282,12 @@ aco_compile_shader(const struct aco_compiler_options* options, const struct aco_
+ }
+ 
+ void
+-aco_compile_vs_prolog(const struct aco_compiler_options* options,
++aco_compile_vs_prolog(const struct aco_compiler_options* options_in,
+                       const struct aco_shader_info* info, const struct aco_vs_prolog_info* pinfo,
+                       const struct ac_shader_args* args, aco_callback* build_prolog, void** binary)
+ {
++   struct aco_compiler_options xclipse_tmp;
++   const struct aco_compiler_options* options = xclipse_options(options_in, &xclipse_tmp);
+    init();
+ 
+    /* create program */
+@@ -296,28 +311,34 @@ aco_compile_vs_prolog(const struct aco_compiler_options* options,
+ }
+ 
+ void
+-aco_compile_ps_epilog(const struct aco_compiler_options* options,
++aco_compile_ps_epilog(const struct aco_compiler_options* options_in,
+                       const struct aco_shader_info* info, const struct aco_ps_epilog_info* pinfo,
+                       const struct ac_shader_args* args, aco_callback* build_epilog, void** binary)
+ {
++   struct aco_compiler_options xclipse_tmp;
++   const struct aco_compiler_options* options = xclipse_options(options_in, &xclipse_tmp);
+    aco_compile_shader_part(options, info, args, select_ps_epilog, (void*)pinfo, build_epilog,
+                            binary);
+ }
+ 
+ void
+-aco_compile_ps_prolog(const struct aco_compiler_options* options,
++aco_compile_ps_prolog(const struct aco_compiler_options* options_in,
+                       const struct aco_shader_info* info, const struct aco_ps_prolog_info* pinfo,
+                       const struct ac_shader_args* args, aco_callback* build_prolog, void** binary)
+ {
++   struct aco_compiler_options xclipse_tmp;
++   const struct aco_compiler_options* options = xclipse_options(options_in, &xclipse_tmp);
+    aco_compile_shader_part(options, info, args, select_ps_prolog, (void*)pinfo, build_prolog,
+                            binary, true);
+ }
+ 
+ void
+-aco_compile_trap_handler(const struct aco_compiler_options* options,
++aco_compile_trap_handler(const struct aco_compiler_options* options_in,
+                          const struct aco_shader_info* info, const struct ac_shader_args* args,
+                          aco_callback* build_binary, void** binary)
+ {
++   struct aco_compiler_options xclipse_tmp;
++   const struct aco_compiler_options* options = xclipse_options(options_in, &xclipse_tmp);
+    init();
+ 
+    ac_shader_config config = {0};
+diff --git a/src/amd/compiler/aco_ir.cpp b/src/amd/compiler/aco_ir.cpp
+index 4b95e43..22f2b08 100644
+--- a/src/amd/compiler/aco_ir.cpp
++++ b/src/amd/compiler/aco_ir.cpp
+@@ -70,6 +70,8 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
+    program->config = config;
+    program->info = *info;
+    program->gfx_level = options->gfx_level;
++   if (debug_get_bool_option("ACO_XCLIPSE", false))
++      program->gfx_level = GFX11;
+    program->wave_size = info->wave_size;
+    program->lane_mask = program->wave_size == 32 ? s1 : s2;
+    program->preserve_s2 = info->vs.preserve_s2;
+diff --git a/src/gallium/drivers/radeonsi/gfx/si_shader.c b/src/gallium/drivers/radeonsi/gfx/si_shader.c
+index 8969699..f24d353 100644
+--- a/src/gallium/drivers/radeonsi/gfx/si_shader.c
++++ b/src/gallium/drivers/radeonsi/gfx/si_shader.c
+@@ -127,6 +127,8 @@ unsigned si_get_max_workgroup_size(const struct si_shader *shader)
+    case MESA_SHADER_VERTEX:
+    case MESA_SHADER_TESS_EVAL:
+       /* Use the largest workgroup size for streamout */
++      if (shader->key.ge.as_ngg && getenv("ACO_XCLIPSE"))
++         return 64;
+       if (shader->key.ge.as_ngg)
+          return shader->info.num_streamout_vec4s ? 256 : 128;
+ 
+diff --git a/src/gallium/drivers/radeonsi/gfx/si_shader_aco.c b/src/gallium/drivers/radeonsi/gfx/si_shader_aco.c
+index 8d7c762..c7bc9d9 100644
+--- a/src/gallium/drivers/radeonsi/gfx/si_shader_aco.c
++++ b/src/gallium/drivers/radeonsi/gfx/si_shader_aco.c
+@@ -1,3 +1,5 @@
++#include <unistd.h>
++#include <stdio.h>
+ /*
+  * Copyright 2023 Advanced Micro Devices, Inc.
+  * All Rights Reserved.
+@@ -108,6 +110,16 @@ si_aco_build_shader_binary(void **data, const aco_callback_params *params)
+    unsigned code_size = params->code_dw * 4;
+    char *buffer = MALLOC(code_size + params->disasm_size);
+    memcpy(buffer, params->code, code_size);
++   if (getenv("XCLIPSE_DUMP")) {
++      static int xclipse_dump_n;
++      char xclipse_dump_path[64];
++      snprintf(xclipse_dump_path, sizeof(xclipse_dump_path), "/tmp/xcsh_%d_%d.bin", getpid(), xclipse_dump_n++);
++      FILE *xclipse_dump_f = fopen(xclipse_dump_path, "wb");
++      if (xclipse_dump_f) {
++         fwrite(params->code, 1, params->code_dw * 4, xclipse_dump_f);
++         fclose(xclipse_dump_f);
++      }
++   }
+ 
+    shader->binary.type = SI_SHADER_BINARY_RAW;
+    shader->binary.code_buffer = buffer;
+@@ -219,6 +231,16 @@ si_aco_build_shader_part_binary(void** priv_ptr, const aco_callback_params *para
+ 
+    char *buffer = MALLOC(code_size + params->disasm_size);
+    memcpy(buffer, params->code, code_size);
++   if (getenv("XCLIPSE_DUMP")) {
++      static int xclipse_dump_n;
++      char xclipse_dump_path[64];
++      snprintf(xclipse_dump_path, sizeof(xclipse_dump_path), "/tmp/xcsh_%d_%d.bin", getpid(), xclipse_dump_n++);
++      FILE *xclipse_dump_f = fopen(xclipse_dump_path, "wb");
++      if (xclipse_dump_f) {
++         fwrite(params->code, 1, params->code_dw * 4, xclipse_dump_f);
++         fclose(xclipse_dump_f);
++      }
++   }
+ 
+    result->binary.type = SI_SHADER_BINARY_RAW;
+    result->binary.code_buffer = buffer;
+diff --git a/src/gallium/drivers/radeonsi/si_state_draw.cpp b/src/gallium/drivers/radeonsi/si_state_draw.cpp
+index 942623c..140acdf 100644
+--- a/src/gallium/drivers/radeonsi/si_state_draw.cpp
++++ b/src/gallium/drivers/radeonsi/si_state_draw.cpp
+@@ -1489,6 +1489,34 @@ static void si_emit_draw_packets(struct si_context *sctx, const struct pipe_draw
+ 
+    radeon_begin(cs);
+ 
++   {
++      static unsigned xclipse_n = ~0u;
++      static unsigned xclipse_reg[64], xclipse_val[64];
++      if (xclipse_n == ~0u) {
++         xclipse_n = 0;
++         const char *e = getenv("XCLIPSE_REGS");
++         while (e && *e && xclipse_n < 64) {
++            char *end;
++            unsigned r = strtoul(e, &end, 0);
++            if (*end != '=')
++               break;
++            unsigned v = strtoul(end + 1, &end, 0);
++            xclipse_reg[xclipse_n] = r;
++            xclipse_val[xclipse_n++] = v;
++            e = *end == ',' ? end + 1 : end;
++         }
++      }
++      for (unsigned i = 0; i < xclipse_n; i++) {
++         unsigned r = xclipse_reg[i];
++         if (r >= 0xa000 && r < 0xb000)
++            radeon_set_context_reg(r * 4, xclipse_val[i]);
++         else if (r >= 0x2c00 && r < 0x3000)
++            radeon_set_sh_reg(r * 4, xclipse_val[i]);
++         else if (r >= 0xc000 && r < 0xd000)
++            radeon_set_uconfig_reg(r * 4, xclipse_val[i]);
++      }
++   }
++
+    if (GFX_VERSION == GFX10_3) {
+       /* Workaround for incorrect stats with adjacent primitive types
+        * (see PAL's waDisableInstancePacking).
