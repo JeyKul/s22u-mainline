@@ -1,0 +1,31 @@
+From d5eab285d3765cc109fadacfcb86d699fe483ac2 Mon Sep 17 00:00:00 2001
+From: JeyKul <jey@kulovac.de>
+Date: Sat, 21 Nov 2026 01:08:26 +0100
+Subject: [PATCH 32/32] WIP: drm/amdgpu: Xclipse 920: Samsung post-boot GL2/SX
+ setup, no KIQ ring reset
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+index 1cb125e40..5b57bb82c 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+@@ -5599,6 +5599,12 @@ static int gfx_v10_0_rlc_resume(struct amdgpu_device *adev)
+ 		if (r)
+ 			return r;
+ 
++		/* sgpu gfx_v10_0_fw_init (EVT1): GL2 -> LLC attributes, SX opt off */
++		WREG32(adev->reg_offset[GC_HWIP][0][1] + 0x5c50, 0x124D96DB); /* GL2ACEM_BIN0 */
++		WREG32(adev->reg_offset[GC_HWIP][0][1] + 0x5c51, 0x0001B69A); /* GL2ACEM_LLC0_RD */
++		WREG32(adev->reg_offset[GC_HWIP][0][1] + 0x5c62, 0x00000001); /* GL2ACEM_LLC_MTY_32DG */
++		WREG32_SOC15(GC, 0, mmSX_DEBUG_1, 0x20020);
++
+ 		gfx_v10_0_init_csb(adev);
+ 		gfx_v10_0_update_spm_vmid_internal(adev, 0xf);
+ 	} else if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP &&
+-- 
+2.56.0
+
