@@ -1,7 +1,7 @@
 From d5eab285d3765cc109fadacfcb86d699fe483ac2 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Sat, 21 Nov 2026 01:08:26 +0100
-Subject: [PATCH 32/32] WIP: drm/amdgpu: Xclipse 920: Samsung post-boot GL2/SX
+Subject: [PATCH 32/34] WIP: drm/amdgpu: Xclipse 920: Samsung post-boot GL2/SX
  setup, no KIQ ring reset
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -27,5 +27,5 @@ index 1cb125e40..5b57bb82c 100644
  		gfx_v10_0_update_spm_vmid_internal(adev, 0xf);
  	} else if (adev->firmware.load_type == AMDGPU_FW_LOAD_PSP &&
 -- 
-2.56.0
+2.56.1
 

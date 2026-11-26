@@ -10,4 +10,6 @@ ssh -F "$TOP/tools/ssh_config" b0s "G=/sys/kernel/debug/exynos2200-g3d
 	echo 'wr 16e086d4 50000000' > \$G	# CP_MEC_CNTL: MEC1/2 halt
 	echo 'wr 16e33d00 0' > \$G		# GIH_RB_CNTL: ring + interrupts off
 	echo quiesced
-	[ '${1:-}' = --reboot ] && { (sleep 1; reboot) >/dev/null 2>&1 & } || true"
+	# a hung GPU leaves unkillable fence waiters that stall a normal shutdown for minutes:
+	# flush the disk, then reboot at once (sysrq b)
+	[ '${1:-}' = --reboot ] && { (sync; sleep 1; echo 1 > /proc/sys/kernel/sysrq; echo b > /proc/sysrq-trigger) >/dev/null 2>&1 & } || true"

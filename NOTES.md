@@ -1,5 +1,55 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (later): MESA DRAWS. RADV and radeonsi render correct triangles on the Xclipse 920
+- RADV (vktri-mesa, plain defaults incl. NGG culling, wave64): 1352 red px + blue clear, and with a
+  colour varying the centre pixel is ff82413c, identical to Samsung's driver.
+- radeonsi (gltri, GLES): interpolated RGB triangle correct, 300 frames 2222 FPS offscreen (GPU at
+  ~300 MHz, no DVFS), glGetError 0. Needs AMD_DEBUG=nodcc for now (DCC readback hangs).
+- All needs ACO_XCLIPSE=1 (mesa-patches/xclipse920.diff). The two last root causes, found by replaying
+  captured streams (tools/ibreplay.c, BOs at the original VAs) and cutting shaders down:
+  - VOPD (v_dual_*) hangs the GPU: SPI busy, no wave alive, no fault. tools/isa/vopd.s vs novopd.s.
+    ACO: no VOPD scheduling, no dot2 VOPD.
+  - s_delay_alu can hang it too (copy shader passed with its two s_delay_alu replaced by s_nop). ACO:
+    no delay_alu pass. Samsung's compiler emits neither.
+  - Descriptor format numbers are gfx11's (32_UINT is 20 in both tables, which hid it): RG32F vertex
+    buffer only loads with the gfx11 table. Both format tables switch with ACO_XCLIPSE.
+- Ruled out on the way (all fine on Xclipse): high-VA CP writes, ACQUIRE_MEM GCR bits, SMEM loads from
+  high VA, s_clause (SMEM and MIMG), v_lshl_add/v_mul_lo, 16-bit true16 ops, a16/d16 image ops.
+- Open: DCC (radeonsi readback of a DCC surface hangs), FS invocation counter in gltri probe mode,
+  GPU DVFS, a DRM/KMS display path for real use (Xorg/glamor, Wayland).
+- gpu-down.sh now reboots with sync + sysrq b: a wedged GPU left fence waiters that stalled normal
+  shutdowns for minutes ("syncing sda").
+
+## 2026-11-26: Samsung's own Vulkan driver draws on mainline amdgpu; Mesa vs blob, finding by finding
+- NEW ANGLE: vendor vulkan.samsung.so (PAL, via libdrm_sgpu = libdrm_amdgpu fork) runs in an Android
+  chroot on the phone (tools/vkblob: android-root.sh builds /android/root from super's system/vendor/odm
+  + runtime/i18n apex; vktri.c = one-triangle test against the HAL, no NDK). Needs 3 sgpu ioctls
+  (INSTANCE_DATA 0x5d, WGP_GATING 0x5e, MEM_PROFILE_ADD 0x5f: xclipse920_compat.c, book-keeping only)
+  and only the amdgpu nodes in the chroot's /dev/dri (simpledrm card0 makes vkCreateInstance fail -3).
+  RESULT: fence signaled, 1352 red px + blue clear = correct. Kernel, firmware, GMC, gIH are fine.
+- Debug knobs in amdgpu (xclipse920_compat.c), all off by default:
+  ibdump=N (next N CS + chained IBs + shader programs to debugfs xclipse_ibdump; tools/ibdecode.py
+  decodes, --regs, --shaders=DIR; tools/isa/dis.sh disassembles), xcpatch=reg=val[/mask],... (rewrite
+  SET_*_REG values in user IBs), xcrelmem=and1,or1,and2,or2 (RELEASE_MEM dw1/2), xcnop=op,... (PKT3 ->
+  NOP), xcdumpva=va:dw,... (capture memory). tools/vkcase.sh = reboot + gpu-up + one RADV/blob run.
+- Blob with 37 of Mesa's state registers patched in: no hang (black output) -> Mesa's hang is not
+  plain context state.
+- Xclipse ABI is gfx11 in more places than the ISA (from blob shaders/descriptors):
+  - NGG: merged_wave_info has only the wave id [27:24]; vertex/prim counts are per thread group in
+    gs_tg_info [20:12]/[30:22]. Mesa read [7:0]/[15:8] -> exec 0 -> no exports. Fixed in
+    ac_nir_lower_intrinsics_to_args.c (rebuild per-wave counts, ACO_XCLIPSE).
+  - 16-bit exports: one enable bit per packed dword (no compr bit). Fixed in aco_assembler.cpp.
+  - Descriptors: gfx11 layout, no RESOURCE_LEVEL (V# dw3 b24, T# dw2 b31). has_desc_resource_level=0.
+  - Compute local ids packed in v0 (x [9:0], y [19:10]); 1D tests could not tell. ids_packed=1.
+  - Blob never uses partial thread groups; RADV's NUM_THREAD_PARTIAL hangs it -> whole groups (radv).
+  - Blob always sets COMPUTE/SPI_TMPRING_SIZE WAVES=192, RSRC1.SGPRS = real count, NGG wave32
+    passthrough-no-msg, VS RSRC1 WGP_MODE=1. (TMPRING now emitted by radv; did not fix the hang alone.)
+- RADV still hangs, even vkCmdFillBuffer (shader = one global_store_b64). CP parks on the
+  WAIT_REG_MEM after the dispatch, SPI_BUSY, no live waves, no VM fault. Same dispatch + EOP wait from
+  gpurun passes; radeonsi glcomp passes. tools/ibreplay.c replays RADV's captured stream with BOs at
+  RADV's VAs and REPRODUCES the hang (cause: see the entry above).
+- Mesa changes are local in src/mesa (env ACO_XCLIPSE=1; ACO_XCLIPSE_LOWVA=1 test: no effect).
+
 ## 2026-11-21: gfx11 code runs; compute via Mesa works; draws still hang
 - tools/gpurun.c (raw compute dispatch, libdrm_amdgpu) + tools/isa/*.s (llvm-mc -mcpu=gfx1100,
   tools/isa/asm.sh): gfx11 stores/atomics/s_delay_alu/s_clause/dealloc_vgprs all work; thread IDs

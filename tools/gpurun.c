@@ -3,6 +3,8 @@
 // Build: gcc -O2 -o gpurun gpurun.c $(pkg-config --cflags --libs libdrm_amdgpu)
 // Run:   ./gpurun shader.bin [threads=64] [wave32=1] [rsrc1] [rsrc2] [timeout_ms]
 // Shader args: s[0:1] = data buffer VA (64 KiB, prefilled 0xaaaaaaaa).
+// GPURUN_UD=a,b,lo,hi,...: user SGPR values ("lo"/"hi": data VA).
+// GPURUN_EOPWAIT=<RELEASE_MEM dw1 hex>: end the IB with RELEASE_MEM to data+0xf000 and WAIT_REG_MEM on it.
 // Prints the first 64 dwords of the buffer after the dispatch.
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
@@ -88,7 +90,12 @@ int main(int argc, char **argv)
 	uint32_t rsrc[2] = { rsrc1, rsrc2 };
 	uint32_t start[6] = { 0, 0, 0, threads, 1, 1 };	/* START_X/Y/Z, NUM_THREAD_X/Y/Z */
 	uint32_t zero = 0, limits = 0, all = 0xffffffff;
-	uint32_t user[2] = { data.va, data.va >> 32 };
+	uint32_t user[16] = { data.va, data.va >> 32 }, nuser = 2;
+	if (getenv("GPURUN_UD")) {	/* user SGPRs: comma list, "lo"/"hi" = data VA halves */
+		char *e = strdup(getenv("GPURUN_UD")), *t;
+		for (nuser = 0; (t = strsep(&e, ",")) && nuser < 16; nuser++)
+			user[nuser] = !strcmp(t, "lo") ? data.va : !strcmp(t, "hi") ? data.va >> 32 : strtoul(t, 0, 0);
+	}
 
 	sh(ib, &n, 0xb830, 2, pgm);		/* COMPUTE_PGM_LO/HI */
 	sh(ib, &n, 0xb848, 2, rsrc);		/* COMPUTE_PGM_RSRC1/2 */
@@ -100,12 +107,19 @@ int main(int argc, char **argv)
 	sh(ib, &n, 0xb864, 1, &all);		/* SE2 */
 	sh(ib, &n, 0xb868, 1, &all);		/* SE3 */
 	sh(ib, &n, 0xb860, 1, &zero);		/* COMPUTE_TMPRING_SIZE */
-	sh(ib, &n, 0xb900, 2, user);		/* COMPUTE_USER_DATA_0/1 */
+	sh(ib, &n, 0xb900, nuser, user);	/* COMPUTE_USER_DATA_0.. */
 	ib[n++] = PKT3(DISPATCH_DIRECT, 3);
 	ib[n++] = 1;
 	ib[n++] = 1;
 	ib[n++] = 1;
 	ib[n++] = 1 | (1 << 2) | (w32 ? 1 << 15 : 0);	/* COMPUTE_SHADER_EN, FORCE_START_AT_000, CS_W32_EN */
+	if (getenv("GPURUN_EOPWAIT")) {	/* RADV-style in-IB barrier after the dispatch */
+		uint64_t f = data.va + 0xf000;
+		ib[n++] = PKT3(0x49, 6); ib[n++] = strtoul(getenv("GPURUN_EOPWAIT"), NULL, 16);
+		ib[n++] = 0x23000000; ib[n++] = f; ib[n++] = f >> 32; ib[n++] = 1; ib[n++] = 0; ib[n++] = 0;
+		ib[n++] = PKT3(0x3c, 5); ib[n++] = 0x13; ib[n++] = f; ib[n++] = f >> 32;
+		ib[n++] = 1; ib[n++] = 0xffffffff; ib[n++] = 4;
+	}
 	while (n & 7)
 		ib[n++] = 0xffff1000;	/* type-3 NOP */
 

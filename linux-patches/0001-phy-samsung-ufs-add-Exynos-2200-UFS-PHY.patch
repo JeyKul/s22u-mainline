@@ -1,7 +1,7 @@
 From bd8f7cd6417d6332805ba012c9e0c0a00aea1a9a Mon Sep 17 00:00:00 2001
 From: hacen <hacenbm144@gmail.com>
 Date: Fri, 9 Oct 2026 17:15:20 +0000
-Subject: [PATCH 01/32] phy: samsung-ufs: add Exynos 2200 UFS PHY
+Subject: [PATCH 01/34] phy: samsung-ufs: add Exynos 2200 UFS PHY
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_015Zi6dy8kB9rd8PzqHkWkui
@@ -166,5 +166,5 @@ index f2c2e744e..3949131bd 100644
  
  #endif /* _PHY_SAMSUNG_UFS_ */
 -- 
-2.56.0
+2.56.1
 

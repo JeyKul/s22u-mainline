@@ -1,0 +1,57 @@
+From 1495f730e77677458270461567c0d521c6c5e454 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 16:50:45 +0100
+Subject: [PATCH 33/34] WIP: drm/amdgpu: Xclipse 920: TCP harvest, no power
+ brake, no UTCL2 harvest
+
+As sgpu does on GC 10.4 (the UTCL2 harvest register moved to 0x16f7).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c   | 7 +++++--
+ drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c | 4 ++++
+ 2 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+index 5b57bb82c..68028768d 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfx_v10_0.c
+@@ -7620,7 +7620,8 @@ static int gfx_v10_0_hw_init(struct amdgpu_ip_block *ip_block)
+ 	 */
+ 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 1, 10) ||
+ 	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 1, 1) ||
+-	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 1, 2))
++	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 1, 2) ||
++	    amdgpu_is_xclipse920(adev))
+ 		gfx_v10_0_tcp_harvest(adev);
+ 
+ 	r = gfx_v10_0_cp_resume(adev);
+@@ -7630,7 +7631,9 @@ static int gfx_v10_0_hw_init(struct amdgpu_ip_block *ip_block)
+ 	if (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(10, 3, 0))
+ 		gfx_v10_3_program_pbb_mode(adev);
+ 
+-	if (amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(10, 3, 0) && !amdgpu_sriov_vf(adev))
++	/* sgpu programs no power brake on the Xclipse 920 */
++	if (amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(10, 3, 0) && !amdgpu_sriov_vf(adev) &&
++	    !amdgpu_is_xclipse920(adev))
+ 		gfx_v10_3_set_power_brake_sequence(adev);
+ 
+ 	r = amdgpu_irq_get(adev, &adev->gfx.priv_reg_irq, 0);
+diff --git a/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c b/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
+index fb097f88b..8b33eade3 100644
+--- a/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
++++ b/drivers/gpu/drm/amd/amdgpu/gfxhub_v2_1.c
+@@ -519,6 +519,10 @@ static void gfxhub_v2_1_utcl2_harvest(struct amdgpu_device *adev)
+ 		adev->gfx.config.max_sh_per_se *
+ 		adev->gfx.config.max_shader_engines);
+ 
++	/* GC 10.4 moved this register (0x16f7); sgpu does no UTCL2 harvesting */
++	if (amdgpu_is_xclipse920(adev))
++		return;
++
+ 	switch (amdgpu_ip_version(adev, GC_HWIP, 0)) {
+ 	case IP_VERSION(10, 3, 1):
+ 	case IP_VERSION(10, 3, 3):
+-- 
+2.56.1
+

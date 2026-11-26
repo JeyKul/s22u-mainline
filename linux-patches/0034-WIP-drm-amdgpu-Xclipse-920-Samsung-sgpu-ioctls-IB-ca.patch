@@ -1,0 +1,468 @@
+From 522af002b8099fea92fd6dffcbb4185c5a70c3a8 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 16:50:45 +0100
+Subject: [PATCH 34/34] WIP: drm/amdgpu: Xclipse 920: Samsung sgpu ioctls, IB
+ capture and patch knobs
+
+Samsung's user-space driver (vulkan.samsung.so) calls three sgpu ioctls on
+top of the amdgpu uAPI: SGPU_INSTANCE_DATA, AMDGPU_WGP_GATING and
+SGPU_MEM_PROFILE_ADD. Answer them as book-keeping, so the vendor driver
+runs on mainline amdgpu as a reference.
+
+Debug module parameters for comparing drivers, all off by default:
+ibdump=N captures the next N submissions (chained IBs, shader programs,
+xcdumpva= memory) to debugfs xclipse_ibdump; xcpatch= rewrites register
+values, xcrelmem= RELEASE_MEM fields and xcnop= packets in user IBs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/amd/amdgpu/Makefile           |   2 +-
+ drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c        |   3 +
+ drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c       |   5 +
+ .../gpu/drm/amd/amdgpu/xclipse920_compat.c    | 303 ++++++++++++++++++
+ .../gpu/drm/amd/amdgpu/xclipse920_compat.h    |  66 ++++
+ 5 files changed, 378 insertions(+), 1 deletion(-)
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
+ create mode 100644 drivers/gpu/drm/amd/amdgpu/xclipse920_compat.h
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/Makefile b/drivers/gpu/drm/amd/amdgpu/Makefile
+index 7b6790c5a..3671de264 100644
+--- a/drivers/gpu/drm/amd/amdgpu/Makefile
++++ b/drivers/gpu/drm/amd/amdgpu/Makefile
+@@ -66,7 +66,7 @@ amdgpu-y += amdgpu_device.o amdgpu_reg_access.o amdgpu_doorbell_mgr.o amdgpu_kms
+ 	amdgpu_atomfirmware.o amdgpu_vf_error.o amdgpu_sched.o \
+ 	amdgpu_debugfs.o amdgpu_ids.o amdgpu_gmc.o amdgpu_mmhub.o amdgpu_hdp.o \
+ 	amdgpu_xgmi.o amdgpu_csa.o amdgpu_ras.o amdgpu_vm_cpu.o \
+-	amdgpu_vm_sdma.o amdgpu_discovery.o xclipse920_reg_init.o xclipse920_ih.o amdgpu_ras_eeprom.o amdgpu_nbio.o \
++	amdgpu_vm_sdma.o amdgpu_discovery.o xclipse920_reg_init.o xclipse920_ih.o xclipse920_compat.o amdgpu_ras_eeprom.o amdgpu_nbio.o \
+ 	amdgpu_umc.o smu_v11_0_i2c.o amdgpu_fru_eeprom.o amdgpu_rap.o \
+ 	amdgpu_fw_attestation.o amdgpu_securedisplay.o \
+ 	amdgpu_eeprom.o amdgpu_mca.o amdgpu_psp_ta.o amdgpu_lsdma.o amdgpu_lockdep.o \
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+index ef8a61ce4..792c79379 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c
+@@ -35,6 +35,7 @@
+ #include <drm/ttm/ttm_tt.h>
+ 
+ #include "amdgpu_cs.h"
++#include "xclipse920_compat.h"
+ #include "amdgpu.h"
+ #include "amdgpu_trace.h"
+ #include "amdgpu_gmc.h"
+@@ -1468,6 +1469,8 @@ int amdgpu_cs_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
+ 	if (r)
+ 		goto error_free_user_pages;
+ 
++	xclipse920_ibdump(&parser);
++
+ 	r = amdgpu_cs_vm_handling(&parser);
+ 	if (r)
+ 		goto error_free_user_pages;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index 4c409862e..5871724c0 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -44,6 +44,7 @@
+ #include "amdgpu_amdkfd.h"
+ #include "amdgpu_dma_buf.h"
+ #include "amdgpu_drv.h"
++#include "xclipse920_compat.h"
+ #include "amdgpu_fdinfo.h"
+ #include "amdgpu_irq.h"
+ #include "amdgpu_psp.h"
+@@ -3118,6 +3119,10 @@ const struct drm_ioctl_desc amdgpu_ioctls_kms[] = {
+ 	DRM_IOCTL_DEF_DRV(AMDGPU_USERQ_WAIT, amdgpu_userq_wait_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
+ 	DRM_IOCTL_DEF_DRV(AMDGPU_GEM_LIST_HANDLES, amdgpu_gem_list_handles_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
+ 	DRM_IOCTL_DEF_DRV(AMDGPU_PROC_OPTIONS, amdgpu_proc_options_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
++	/* Samsung sgpu additions, used by Samsung's Xclipse 920 user-space driver */
++	DRM_IOCTL_DEF_DRV(SGPU_INSTANCE_DATA, xclipse920_instance_data_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
++	DRM_IOCTL_DEF_DRV(AMDGPU_WGP_GATING, xclipse920_wgp_gating_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
++	DRM_IOCTL_DEF_DRV(SGPU_MEM_PROFILE_ADD, xclipse920_mem_profile_add_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
+ };
+ 
+ static const struct drm_driver amdgpu_kms_driver = {
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
+new file mode 100644
+index 000000000..c7b2b8a9d
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
+@@ -0,0 +1,303 @@
++// SPDX-License-Identifier: MIT
++/*
++ * Samsung sgpu ioctls that Samsung's Xclipse 920 user-space driver (PAL based,
++ * vulkan.samsung.so) calls on top of the amdgpu uAPI. Book-keeping only on
++ * mainline: instance handles, memory profiles and WGP gating are accepted and
++ * answered with "all WGPs on".
++ */
++#include <drm/drm_file.h>
++#include "amdgpu.h"
++#include "xclipse920_compat.h"
++
++static atomic_t xclipse920_instance_id = ATOMIC_INIT(0);
++
++int xclipse920_instance_data_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
++{
++	union drm_sgpu_instance_data *args = data;
++
++	switch (args->in.op) {
++	case SGPU_INSTANCE_DATA_OP_CREATE:
++		args->out.handle = atomic_inc_return(&xclipse920_instance_id);
++		return 0;
++	case SGPU_INSTANCE_DATA_OP_DESTROY:
++		return 0;
++	}
++	return -EINVAL;
++}
++
++int xclipse920_wgp_gating_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
++{
++	struct amdgpu_device *adev = drm_to_adev(dev);
++	union drm_amdgpu_wgp_gating *wgp = data;
++	u32 nwgp = adev->gfx.config.max_cu_per_sh / 2;
++	u32 op = wgp->in.op;
++
++	memset(&wgp->out, 0, sizeof(wgp->out));
++	switch (op) {
++	case AMDGPU_WGP_GATING_WGP_CLOCK_ON:
++		wgp->out.wgp_clock_on.number = nwgp;
++		return 0;
++	case AMDGPU_WGP_GATING_WGP_AON:
++		wgp->out.wgp_aon.number = nwgp;
++		wgp->out.wgp_aon.bitmap[0][0] = GENMASK(nwgp - 1, 0);
++		return 0;
++	case AMDGPU_WGP_GATING_WGP_STATUS:
++		wgp->out.wgp_status.bitmap[0][0] = GENMASK(nwgp - 1, 0);
++		return 0;
++	}
++	return -EINVAL;
++}
++
++int xclipse920_mem_profile_add_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
++{
++	return 0;
++}
++
++/*
++ * IB capture for comparing user-space drivers (debug): with ibdump=N the next N
++ * submissions are copied, with every IB they chain to (INDIRECT_BUFFER), into
++ * a buffer read from debugfs "xclipse_ibdump". Record: magic 0x1bd0, depth,
++ * dwords, va lo, va hi, ring type, then the dwords.
++ */
++#include <linux/debugfs.h>
++#include <linux/vmalloc.h>
++#include "amdgpu_cs.h"
++#include "amdgpu_vm.h"
++
++static int xclipse920_ibdump_left;
++module_param_named(ibdump, xclipse920_ibdump_left, int, 0644);
++MODULE_PARM_DESC(ibdump, "Xclipse 920: capture the next N command submissions to debugfs xclipse_ibdump");
++
++/*
++ * Register override (debug): xcpatch="reg=val[/mask],..." (dword offsets) rewrites
++ * the value of every SET_{CONTEXT,SH,UCONFIG,CONFIG}_REG write to reg in the
++ * submitted IBs, in place. For bisecting one driver's state against another's.
++ */
++static char xcpatch_str[2048];
++module_param_string(xcpatch, xcpatch_str, sizeof(xcpatch_str), 0644);
++MODULE_PARM_DESC(xcpatch, "Xclipse 920: reg=val[/mask],... register value overrides in user IBs");
++
++/* RELEASE_MEM rewrite (debug): xcrelmem=and1,or1,and2,or2 applied to its dwords 1 and 2 */
++static uint xcrelmem[4] = { ~0u, 0, ~0u, 0 };
++static int xcrelmem_n;
++module_param_array(xcrelmem, uint, &xcrelmem_n, 0644);
++MODULE_PARM_DESC(xcrelmem, "Xclipse 920: and1,or1,and2,or2 for RELEASE_MEM dwords 1 and 2 in user IBs");
++
++/* packet removal (debug): xcnop=op,op,... turns those PKT3 opcodes into NOPs of the same size */
++static uint xcnop[8];
++static int xcnop_n;
++module_param_array(xcnop, uint, &xcnop_n, 0644);
++MODULE_PARM_DESC(xcnop, "Xclipse 920: PKT3 opcodes to replace by NOPs in user IBs");
++
++struct xcpatch { u32 reg, val, mask; };
++static struct xcpatch xcpatch_tab[128];
++static int xcpatch_n;
++static char xcpatch_parsed[2048];
++
++static void xcpatch_parse(void)
++{
++	static char buf[2048];
++	char *s = buf, *tok;
++
++	if (!strcmp(xcpatch_parsed, xcpatch_str))
++		return;
++	strscpy(xcpatch_parsed, xcpatch_str);
++	strscpy(buf, xcpatch_str);
++	xcpatch_n = 0;
++	while ((tok = strsep(&s, ",")) && xcpatch_n < ARRAY_SIZE(xcpatch_tab)) {
++		struct xcpatch *x = &xcpatch_tab[xcpatch_n];
++		char *v = strchr(tok, '='), *m;
++
++		if (!v)
++			continue;
++		*v++ = 0;
++		m = strchr(v, '/');
++		if (m)
++			*m++ = 0;
++		if (kstrtou32(tok, 0, &x->reg) || kstrtou32(v, 0, &x->val) ||
++		    (m && kstrtou32(m, 0, &x->mask)))
++			continue;
++		if (!m)
++			x->mask = ~0u;
++		xcpatch_n++;
++	}
++	pr_info("xclipse920: %d register overrides\n", xcpatch_n);
++}
++
++static void xcpatch_ib(u32 *ib, u32 ndw)
++{
++	u32 i, k, j;
++
++	for (i = 0; i < ndw; ) {
++		u32 h = ib[i], op = (h >> 8) & 0xff, n = ((h >> 16) & 0x3fff) + 2, base;
++
++		if ((h >> 30) != 3) {
++			i++;
++			continue;
++		}
++		switch (op) {
++		case 0x68: base = 0x2000; break;
++		case 0x69: case 0x6a: base = 0xa000; break;
++		case 0x76: case 0x9b: base = 0x2c00; break;
++		case 0x79: case 0x7a: base = 0xc000; break;
++		default: base = 0;
++		}
++		for (j = 0; j < xcnop_n; j++)
++			if (op == xcnop[j])
++				ib[i] = (h & 0xffff00ff) | (0x10 << 8);
++		if (op == 0x49 && xcrelmem_n == 4 && i + 2 < ndw) {
++			ib[i + 1] = (ib[i + 1] & xcrelmem[0]) | xcrelmem[1];
++			ib[i + 2] = (ib[i + 2] & xcrelmem[2]) | xcrelmem[3];
++		}
++		if (base && i + n <= ndw)
++			for (k = 2; k < n; k++)
++				for (j = 0; j < xcpatch_n; j++)
++					if (xcpatch_tab[j].reg == base + (ib[i + 1] & 0xffff) + k - 2)
++						ib[i + k] = (ib[i + k] & ~xcpatch_tab[j].mask) |
++							    (xcpatch_tab[j].val & xcpatch_tab[j].mask);
++		i += n;
++	}
++}
++
++#define IBDUMP_SIZE	(8 << 20)
++static u32 *ibdump_buf;
++static size_t ibdump_len;	/* in dwords */
++static DEFINE_MUTEX(ibdump_lock);
++static struct debugfs_blob_wrapper ibdump_blob;
++
++/* extra memory to capture with each submission (debug): xcdumpva=va:dwords,... */
++static char xcdumpva[256];
++module_param_string(xcdumpva, xcdumpva, sizeof(xcdumpva), 0644);
++MODULE_PARM_DESC(xcdumpva, "Xclipse 920: va:dwords,... memory captured with each ibdump submission");
++
++/* shader program addresses seen in this submission: SPI_SHADER_PGM_LO/HI_{PS,VS,ES_GS,GS,ES,LS_HS}, COMPUTE */
++static const u16 ibdump_pgm_reg[] = { 0x2c08, 0x2c48, 0x2c84, 0x2c88, 0x2cc8, 0x2d04, 0x2e0c };
++static u32 ibdump_pgm[ARRAY_SIZE(ibdump_pgm_reg)][2];
++
++static void ibdump_track(u32 reg, u32 val)
++{
++	unsigned int k;
++
++	for (k = 0; k < ARRAY_SIZE(ibdump_pgm_reg); k++)
++		if (reg == ibdump_pgm_reg[k] || reg == ibdump_pgm_reg[k] + 1)
++			ibdump_pgm[k][reg - ibdump_pgm_reg[k]] = val;
++}
++
++static void ibdump_ib(struct amdgpu_cs_parser *p, u64 va, u32 ndw, u32 depth, u32 ring);
++
++static void ibdump_ib_raw(struct amdgpu_cs_parser *p, u64 va, u32 ndw, u32 ring)
++{
++	ibdump_ib(p, va, ndw, 0x80, ring);	/* depth 0x80: data, not PM4 */
++}
++
++static void ibdump_ib(struct amdgpu_cs_parser *p, u64 va, u32 ndw, u32 depth, u32 ring)
++{
++	struct amdgpu_bo_va_mapping *m;
++	struct amdgpu_bo *bo;
++	struct amdgpu_device *adev = p->adev;
++	u32 *ib, i;
++
++	va &= AMDGPU_GMC_HOLE_MASK;
++	m = amdgpu_vm_bo_lookup_mapping(&((struct amdgpu_fpriv *)p->filp->driver_priv)->vm,
++					va / AMDGPU_GPU_PAGE_SIZE);
++	if (!m || !m->bo_va || !m->bo_va->base.bo || (depth > 4 && depth != 0x80))
++		return;
++	bo = m->bo_va->base.bo;
++	if (depth == 0x80)	/* clamp a data dump to its mapping */
++		ndw = min_t(u64, ndw, ((m->last + 1) * AMDGPU_GPU_PAGE_SIZE - va) / 4);
++	if (dma_resv_locking_ctx(bo->tbo.base.resv) != drm_exec_ticket(&p->exec) ||
++	    va + ndw * 4ull > (m->last + 1) * AMDGPU_GPU_PAGE_SIZE || amdgpu_bo_kmap(bo, (void **)&ib))
++		return;
++	ib = (u32 *)((u8 *)ib + va - m->start * AMDGPU_GPU_PAGE_SIZE);
++	if (depth != 0x80 && (xcpatch_n || xcrelmem_n == 4 || xcnop_n))
++		xcpatch_ib(ib, ndw);
++	if (!ibdump_buf || READ_ONCE(xclipse920_ibdump_left) < 0 || ibdump_len + 6 + ndw > IBDUMP_SIZE / 4)
++		goto chase;
++
++	ibdump_buf[ibdump_len++] = 0x1bd0;
++	ibdump_buf[ibdump_len++] = depth;
++	ibdump_buf[ibdump_len++] = ndw;
++	ibdump_buf[ibdump_len++] = lower_32_bits(va);
++	ibdump_buf[ibdump_len++] = upper_32_bits(va);
++	ibdump_buf[ibdump_len++] = ring;
++	memcpy(&ibdump_buf[ibdump_len], ib, ndw * 4);
++	ibdump_len += ndw;
++chase:
++	if (depth == 0x80)
++		return;
++
++	for (i = 0; i < ndw; ) {
++		u32 h = ib[i], op = (h >> 8) & 0xff, n = ((h >> 16) & 0x3fff) + 2;
++
++		if ((h >> 30) != 3) {	/* type 2 filler or garbage: skip one dword */
++			i++;
++			continue;
++		}
++		if ((op == 0x76 || op == 0x9b) && i + n <= ndw) {
++			u32 k;
++
++			for (k = 2; k < n; k++)
++				ibdump_track(0x2c00 + (ib[i + 1] & 0xffff) + k - 2, ib[i + k]);
++		}
++		/* INDIRECT_BUFFER (0x3f) and INDIRECT_BUFFER_CNST (0x33) */
++		if ((op == 0x3f || op == 0x33) && i + 3 < ndw)
++			ibdump_ib(p, ((u64)(ib[i + 2] & 0xffff) << 32) | (ib[i + 1] & ~3u),
++				  ib[i + 3] & 0xfffff, depth + 1, ring);
++		i += n;
++	}
++}
++
++void xclipse920_ibdump(struct amdgpu_cs_parser *p)
++{
++	struct amdgpu_device *adev = p->adev;
++	unsigned int j, i;
++
++	if (!amdgpu_is_xclipse920(adev) ||
++	    (READ_ONCE(xclipse920_ibdump_left) <= 0 && !xcpatch_str[0] && !xcpatch_n && xcrelmem_n != 4 && !xcnop_n))
++		return;
++	mutex_lock(&ibdump_lock);
++	xcpatch_parse();
++	if (!ibdump_buf) {
++		ibdump_buf = vzalloc(IBDUMP_SIZE);
++		if (!ibdump_buf)
++			goto out;
++		ibdump_blob.data = ibdump_buf;
++		debugfs_create_blob("xclipse_ibdump", 0400, adev_to_drm(adev)->primary->debugfs_root,
++				    &ibdump_blob);
++	}
++	xclipse920_ibdump_left--;	/* < 0: patch only, no capture */
++	for (j = 0; j < p->gang_size; j++) {
++		struct amdgpu_job *job = p->jobs[j];
++
++		for (i = 0; i < job->num_ibs; i++)
++			ibdump_ib(p, job->ibs[i].gpu_addr, job->ibs[i].length_dw, 0,
++				  amdgpu_job_ring(job)->funcs->type);
++	}
++	/* the shader programs, 2 KB each, as records with ring 0x100 + register index */
++	for (i = 0; i < ARRAY_SIZE(ibdump_pgm_reg); i++) {
++		u64 pgm = ((u64)ibdump_pgm[i][1] << 40) | ((u64)ibdump_pgm[i][0] << 8);
++
++		if ((ibdump_pgm[i][0] || ibdump_pgm[i][1]) && ibdump_buf && xclipse920_ibdump_left >= 0)
++			ibdump_ib_raw(p, pgm, 512, 0x100 + i);
++		ibdump_pgm[i][0] = ibdump_pgm[i][1] = 0;
++	}
++	if (xcdumpva[0] && ibdump_buf && xclipse920_ibdump_left >= 0) {
++		char buf[256], *str = buf, *tok;
++
++		strscpy(buf, xcdumpva);
++		while ((tok = strsep(&str, ","))) {
++			char *c = strchr(tok, ':');
++			u64 va;
++			u32 ndw;
++
++			if (!c)
++				continue;
++			*c++ = 0;
++			if (!kstrtou64(tok, 0, &va) && !kstrtou32(c, 0, &ndw))
++				ibdump_ib_raw(p, va, ndw, 0x1ff);
++		}
++	}
++	ibdump_blob.size = ibdump_len * 4;
++out:
++	mutex_unlock(&ibdump_lock);
++}
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.h b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.h
+new file mode 100644
+index 000000000..7977707ab
+--- /dev/null
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.h
+@@ -0,0 +1,66 @@
++/* SPDX-License-Identifier: MIT */
++/* Samsung sgpu uAPI additions (from Samsung's amdgpu_drm.h), for its user-space driver */
++#ifndef __XCLIPSE920_COMPAT_H__
++#define __XCLIPSE920_COMPAT_H__
++
++#include <drm/drm_ioctl.h>
++
++#define DRM_SGPU_INSTANCE_DATA		0x5d
++#define DRM_AMDGPU_WGP_GATING		0x5e
++#define DRM_SGPU_MEM_PROFILE_ADD	0x5f
++
++union drm_sgpu_instance_data {
++	struct {
++		__u32 op;
++		__u32 handle;
++	} in;
++	struct {
++		__u32 handle;
++	} out;
++};
++#define SGPU_INSTANCE_DATA_OP_CREATE	1
++#define SGPU_INSTANCE_DATA_OP_DESTROY	2
++
++#define AMDGPU_WGP_GATING_WGP_CLOCK_ON	1
++#define AMDGPU_WGP_GATING_WGP_AON	2
++#define AMDGPU_WGP_GATING_WGP_STATUS	3
++struct drm_amdgpu_wgp_gating_in {
++	__u32 op;
++	__u32 flags;
++	__u32 value;
++};
++union drm_amdgpu_wgp_gating_out {
++	struct {
++		__u32 number;
++	} wgp_clock_on;
++	struct {
++		__u32 number;
++		__u32 bitmap[4][4];
++	} wgp_aon;
++	struct {
++		__u32 bitmap[4][4];
++	} wgp_status;
++};
++union drm_amdgpu_wgp_gating {
++	struct drm_amdgpu_wgp_gating_in in;
++	union drm_amdgpu_wgp_gating_out out;
++};
++
++struct drm_sgpu_mem_profile_add {
++	__u64 buffer;
++	__u32 len;
++	__u32 instance_data_handle;
++};
++
++#define DRM_IOCTL_SGPU_INSTANCE_DATA	DRM_IOWR(DRM_COMMAND_BASE + DRM_SGPU_INSTANCE_DATA, union drm_sgpu_instance_data)
++#define DRM_IOCTL_AMDGPU_WGP_GATING	DRM_IOWR(DRM_COMMAND_BASE + DRM_AMDGPU_WGP_GATING, union drm_amdgpu_wgp_gating)
++#define DRM_IOCTL_SGPU_MEM_PROFILE_ADD	DRM_IOWR(DRM_COMMAND_BASE + DRM_SGPU_MEM_PROFILE_ADD, struct drm_sgpu_mem_profile_add)
++
++int xclipse920_instance_data_ioctl(struct drm_device *dev, void *data, struct drm_file *filp);
++int xclipse920_wgp_gating_ioctl(struct drm_device *dev, void *data, struct drm_file *filp);
++int xclipse920_mem_profile_add_ioctl(struct drm_device *dev, void *data, struct drm_file *filp);
++
++struct amdgpu_cs_parser;
++void xclipse920_ibdump(struct amdgpu_cs_parser *p);
++
++#endif
+-- 
+2.56.1
+

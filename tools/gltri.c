@@ -118,8 +118,10 @@ int main(int argc, char **argv)
 		}
 		printf("clear issued\n");
 		glUniform1f(ua, 0);
+		if (getenv("GLTRI_DISCARD"))
+			glEnable(GL_RASTERIZER_DISCARD);
 		if (!getenv("GLTRI_NODRAW"))
-			glDrawArrays(GL_TRIANGLES, 0, 3);
+			glDrawArrays(GL_TRIANGLES, 0, getenv("GLTRI_COUNT") ? atoi(getenv("GLTRI_COUNT")) : 3);
 		printf("draw issued\n");
 		glFlush();
 		printf("flushed\n");

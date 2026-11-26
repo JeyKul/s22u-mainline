@@ -1,0 +1,6 @@
+sysroot/
+vktri
+*.spv
+spv.h
+vktri-mesa
+inc/

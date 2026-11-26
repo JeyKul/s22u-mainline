@@ -1,7 +1,7 @@
 From 2820630ecb909b4360dcaff7e68a9a48f58a9387 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:48:30 +0100
-Subject: [PATCH 17/32] regulator: s2mps25-acpm: add the S2MPM07 (RF PMIC, SID
+Subject: [PATCH 17/34] regulator: s2mps25-acpm: add the S2MPM07 (RF PMIC, SID
  2)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -58,5 +58,5 @@ index 71cfc00cc..428211a52 100644
  };
  MODULE_DEVICE_TABLE(of, s2mps_acpm_of_match);
 -- 
-2.56.0
+2.56.1
 
