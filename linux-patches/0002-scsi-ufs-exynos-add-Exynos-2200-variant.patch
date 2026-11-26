@@ -1,7 +1,7 @@
 From 061688181cd3ea2e1f8a9e7a44953dd65f10b7a3 Mon Sep 17 00:00:00 2001
 From: hacen <hacenbm144@gmail.com>
 Date: Fri, 20 Nov 2026 12:51:30 +0100
-Subject: [PATCH 02/37] scsi: ufs: exynos: add Exynos 2200 variant
+Subject: [PATCH 02/38] scsi: ufs: exynos: add Exynos 2200 variant
 
 From github.com/hacenbm144-spec/b0s-mainline-6.17-dts patch 0003, rebased
 onto v7.3 (context only).

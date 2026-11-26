@@ -13,95 +13,106 @@ index 59d30c8..2b1a475 100644
    with_gallium_etnaviv,
    with_gallium_freedreno,
 diff --git a/src/amd/common/ac_gpu_info.c b/src/amd/common/ac_gpu_info.c
-index aae6e0b..b97e589 100644
+index aae6e0b..ce43a52 100644
 --- a/src/amd/common/ac_gpu_info.c
 +++ b/src/amd/common/ac_gpu_info.c
-@@ -346,9 +346,14 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "ac_gpu_info.h"
+ #include "ac_shader_util.h"
+ #include "ac_debug.h"
+@@ -346,9 +347,14 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
      * PRIMGEN_PASSTHRU_NO_MSG.
      */
     out->has_ngg_passthru_no_msg = info->family >= CHIP_NAVI23;
-+   if (getenv("ACO_XCLIPSE"))
++   if (util_xclipse920())
 +      out->has_ngg_passthru_no_msg = true;
  
     out->local_invocation_ids_packed =
        info->gfx_level >= GFX11 || (!info->has_graphics && info->family >= CHIP_MI200);
 +   /* Xclipse 920: compute thread ids come packed in v0 like gfx11 (Samsung's shaders unpack them) */
-+   if (getenv("ACO_XCLIPSE"))
++   if (util_xclipse920())
 +      out->local_invocation_ids_packed = true;
     out->has_fmask = info->gfx_level <= GFX10_3;
  
     out->has_3d_cube_border_color_mipmap = info->has_graphics || info->family == CHIP_MI100;
-@@ -448,6 +453,9 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
+@@ -448,6 +454,9 @@ ac_fill_compiler_info(struct radeon_info *info, const struct drm_amdgpu_info_dev
  
     out->has_desc_resource_level = (info->gfx_level >= GFX10 && info->gfx_level < GFX11) ||
                                    info->family == CHIP_GFX1156;
 +   /* Xclipse 920: descriptors have the gfx11 layout (Samsung's driver never sets RESOURCE_LEVEL) */
-+   if (getenv("ACO_XCLIPSE"))
++   if (util_xclipse920())
 +      out->has_desc_resource_level = false;
  }
  
  void
 diff --git a/src/amd/common/ac_shader_util.c b/src/amd/common/ac_shader_util.c
-index 656ec9f..5a78122 100644
+index 656ec9f..e830d36 100644
 --- a/src/amd/common/ac_shader_util.c
 +++ b/src/amd/common/ac_shader_util.c
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++#include "util/u_xclipse.h"
 +#include <stdlib.h>
  /*
   * Copyright 2012 Advanced Micro Devices, Inc.
   *
-@@ -482,7 +483,8 @@ static const struct ac_vtx_format_info vb_formats_gfx11[] = {VB_FORMATS};
+@@ -482,7 +484,8 @@ static const struct ac_vtx_format_info vb_formats_gfx11[] = {VB_FORMATS};
  const struct ac_vtx_format_info *
  ac_get_vtx_format_info_table(enum amd_gfx_level level, bool has_alpha_adjust_bug)
  {
 -   if (level >= GFX11)
 +   /* Xclipse 920: gfx11 format numbers, see gfx10_format_table.h */
-+   if (level >= GFX11 || (level >= GFX10 && getenv("ACO_XCLIPSE")))
++   if (level >= GFX11 || (level >= GFX10 && util_xclipse920()))
        return vb_formats_gfx11;
     else if (level >= GFX10)
        return vb_formats_gfx10;
-@@ -792,6 +794,9 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
+@@ -792,6 +795,9 @@ void ac_compute_late_alloc(const struct radeon_info *info, bool ngg, bool ngg_cu
     /* This should never be called on gfx12. Gfx12 doesn't need to mask CUs for late alloc. */
     assert(info->gfx_level < GFX12);
  
-+   if (getenv("ACO_XCLIPSE"))
++   if (util_xclipse920())
 +      return;
 +
     /* CU masking can decrease performance and cause a hang with <= 2 CUs per SA. */
     if (info->min_good_cu_per_sa <= 2)
        return;
 diff --git a/src/amd/common/gfx10_format_table.h b/src/amd/common/gfx10_format_table.h
-index 1f0592a..0ed7f21 100644
+index 1f0592a..f305e71 100644
 --- a/src/amd/common/gfx10_format_table.h
 +++ b/src/amd/common/gfx10_format_table.h
-@@ -7,6 +7,7 @@
+@@ -7,6 +7,8 @@
  #ifndef GFX10_FORMAT_TABLE_H
  #define GFX10_FORMAT_TABLE_H
  
++#include "util/u_xclipse.h"
 +#include <stdlib.h>
  #include "util/format/u_formats.h"
  #include "amd_family.h"
  
-@@ -27,7 +28,8 @@ extern const struct gfx10_format gfx11_format_table[PIPE_FORMAT_COUNT];
+@@ -27,7 +29,8 @@ extern const struct gfx10_format gfx11_format_table[PIPE_FORMAT_COUNT];
  static inline
  const struct gfx10_format* ac_get_gfx10_format_table(const enum amd_gfx_level gfx_level)
  {
 -   if (gfx_level >= GFX11)
 +   /* Xclipse 920: descriptors use the gfx11 format numbers (an RG32F vertex buffer only loads right with them) */
-+   if (gfx_level >= GFX11 || getenv("ACO_XCLIPSE"))
++   if (gfx_level >= GFX11 || util_xclipse920())
        return gfx11_format_table;
     else
        return gfx10_format_table;
 diff --git a/src/amd/common/nir/ac_nir_lower_intrinsics_to_args.c b/src/amd/common/nir/ac_nir_lower_intrinsics_to_args.c
-index f51b184..9e4b6d1 100644
+index f51b184..384678f 100644
 --- a/src/amd/common/nir/ac_nir_lower_intrinsics_to_args.c
 +++ b/src/amd/common/nir/ac_nir_lower_intrinsics_to_args.c
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++#include "util/u_xclipse.h"
 +#include <stdlib.h>
  /*
   * Copyright © 2021 Valve Corporation
   *
-@@ -268,6 +269,21 @@ lower_intrinsic_to_arg(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
+@@ -268,6 +270,21 @@ lower_intrinsic_to_arg(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
     }
     case nir_intrinsic_load_merged_wave_info_amd:
        replacement = ac_nir_load_arg_at_offset(b, s->args, s->args->merged_wave_info, 0, true);
@@ -109,7 +120,7 @@ index f51b184..9e4b6d1 100644
 +       * wave id [27:24]; the thread group's vertex/primitive counts are in gs_tg_info [20:12] and
 +       * [30:22]. Rebuild the per-wave counts [7:0] and [15:8] from them.
 +       */
-+      if (getenv("ACO_XCLIPSE") && s->args->gs_tg_info.used) {
++      if (util_xclipse920() && s->args->gs_tg_info.used) {
 +         nir_def *mwi = replacement;
 +         nir_def *base = nir_imul_imm(b, nir_ubfe_imm(b, mwi, 24, 4), s->options->wave_size);
 +         nir_def *tg_v = ac_nir_unpack_arg(b, s->args, s->args->gs_tg_info, 12, 9);
@@ -124,10 +135,14 @@ index f51b184..9e4b6d1 100644
     case nir_intrinsic_load_workgroup_num_input_vertices_amd:
        replacement = ac_nir_unpack_arg(b, s->args, s->args->gs_tg_info, 12, 9);
 diff --git a/src/amd/compiler/aco_assembler.cpp b/src/amd/compiler/aco_assembler.cpp
-index bdfa155..64a5bb1 100644
+index bdfa155..628704a 100644
 --- a/src/amd/compiler/aco_assembler.cpp
 +++ b/src/amd/compiler/aco_assembler.cpp
-@@ -7,6 +7,7 @@
+@@ -4,9 +4,11 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
  #include "aco_builder.h"
  #include "aco_interface.h"
  #include "aco_ir.h"
@@ -135,11 +150,11 @@ index bdfa155..64a5bb1 100644
  
  #include "common/amdgfxregs.h"
  
-@@ -998,13 +999,19 @@ emit_exp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruc
+@@ -998,13 +1000,19 @@ emit_exp_instruction(asm_context& ctx, std::vector<uint32_t>& out, const Instruc
  
     if (ctx.gfx_level >= GFX11) {
        encoding |= exp.row_en ? 0b1 << 13 : 0;
-+      if (debug_get_bool_option("ACO_XCLIPSE", false))
++      if (util_xclipse920())
 +         encoding |= exp.valid_mask ? 0b1 << 12 : 0;
     } else {
        encoding |= exp.valid_mask ? 0b1 << 12 : 0;
@@ -149,7 +164,7 @@ index bdfa155..64a5bb1 100644
     encoding |= exp.dest << 4;
 -   encoding |= exp.enabled_mask;
 +   /* Xclipse: gfx11 has no compr bit, a 16-bit export enables one bit per packed dword */
-+   if (ctx.gfx_level >= GFX11 && exp.compressed && debug_get_bool_option("ACO_XCLIPSE", false))
++   if (ctx.gfx_level >= GFX11 && exp.compressed && util_xclipse920())
 +      encoding |= ((exp.enabled_mask & 0x3) ? 0x1 : 0) | ((exp.enabled_mask & 0xc) ? 0x2 : 0);
 +   else
 +      encoding |= exp.enabled_mask;
@@ -157,47 +172,52 @@ index bdfa155..64a5bb1 100644
     /* GFX6 (except OLAND and HAINAN) has a bug that it only looks at the X
      * writemask component.
 diff --git a/src/amd/compiler/aco_insert_delay_alu.cpp b/src/amd/compiler/aco_insert_delay_alu.cpp
-index 455d9bb..24f7415 100644
+index 455d9bb..4cf3ea2 100644
 --- a/src/amd/compiler/aco_insert_delay_alu.cpp
 +++ b/src/amd/compiler/aco_insert_delay_alu.cpp
-@@ -6,6 +6,7 @@
+@@ -4,8 +4,10 @@
+  * SPDX-License-Identifier: MIT
+  */
  
++#include "util/u_xclipse.h"
  #include "aco_builder.h"
  #include "aco_ir.h"
 +#include "util/u_debug.h"
  
  #include <map>
  #include <vector>
-@@ -334,6 +335,9 @@ handle_loop_latch(Program* program, Block& block, delay_ctx& ctx)
+@@ -334,6 +336,9 @@ handle_loop_latch(Program* program, Block& block, delay_ctx& ctx)
  void
  insert_delay_alu(Program* program)
  {
 +   /* Xclipse 920: s_delay_alu can hang it (no wave left, SPI busy); Samsung's compiler never emits it */
-+   if (debug_get_bool_option("ACO_XCLIPSE", false))
++   if (util_xclipse920())
 +      return;
     /* per BB ctx */
     delay_ctx ctx(program);
  
 diff --git a/src/amd/compiler/aco_interface.cpp b/src/amd/compiler/aco_interface.cpp
-index e6dae47..cf0c845 100644
+index e6dae47..6fcd20c 100644
 --- a/src/amd/compiler/aco_interface.cpp
 +++ b/src/amd/compiler/aco_interface.cpp
-@@ -5,6 +5,7 @@
+@@ -4,7 +4,9 @@
+  * SPDX-License-Identifier: MIT
   */
  
++#include "util/u_xclipse.h"
  #include "aco_interface.h"
 +#include "util/u_debug.h"
  
  #include "aco_ir.h"
  
-@@ -243,11 +244,23 @@ aco_compile_shader_part(const struct aco_compiler_options* options,
+@@ -243,11 +245,23 @@ aco_compile_shader_part(const struct aco_compiler_options* options,
  
  } /* end namespace */
  
 +static const struct aco_compiler_options*
 +xclipse_options(const struct aco_compiler_options* options, struct aco_compiler_options* tmp)
 +{
-+   if (!debug_get_bool_option("ACO_XCLIPSE", false))
++   if (!util_xclipse920())
 +      return options;
 +   *tmp = *options;
 +   tmp->gfx_level = GFX11;
@@ -215,7 +235,7 @@ index e6dae47..cf0c845 100644
     init();
  
     ac_shader_config config = {0};
-@@ -269,10 +282,12 @@ aco_compile_shader(const struct aco_compiler_options* options, const struct aco_
+@@ -269,10 +283,12 @@ aco_compile_shader(const struct aco_compiler_options* options, const struct aco_
  }
  
  void
@@ -229,7 +249,7 @@ index e6dae47..cf0c845 100644
     init();
  
     /* create program */
-@@ -296,28 +311,34 @@ aco_compile_vs_prolog(const struct aco_compiler_options* options,
+@@ -296,28 +312,34 @@ aco_compile_vs_prolog(const struct aco_compiler_options* options,
  }
  
  void
@@ -268,67 +288,87 @@ index e6dae47..cf0c845 100644
  
     ac_shader_config config = {0};
 diff --git a/src/amd/compiler/aco_ir.cpp b/src/amd/compiler/aco_ir.cpp
-index 4b95e43..22f2b08 100644
+index 4b95e43..7a7a791 100644
 --- a/src/amd/compiler/aco_ir.cpp
 +++ b/src/amd/compiler/aco_ir.cpp
-@@ -70,6 +70,8 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "aco_ir.h"
+ 
+ #include "aco_builder.h"
+@@ -70,6 +71,8 @@ init_program(Program* program, Stage stage, const struct aco_shader_info* info,
     program->config = config;
     program->info = *info;
     program->gfx_level = options->gfx_level;
-+   if (debug_get_bool_option("ACO_XCLIPSE", false))
++   if (util_xclipse920())
 +      program->gfx_level = GFX11;
     program->wave_size = info->wave_size;
     program->lane_mask = program->wave_size == 32 ? s1 : s2;
     program->preserve_s2 = info->vs.preserve_s2;
 diff --git a/src/amd/compiler/aco_register_allocation.cpp b/src/amd/compiler/aco_register_allocation.cpp
-index b6e2e7f..ae613ac 100644
+index b6e2e7f..f26d2de 100644
 --- a/src/amd/compiler/aco_register_allocation.cpp
 +++ b/src/amd/compiler/aco_register_allocation.cpp
-@@ -5,6 +5,7 @@
+@@ -4,7 +4,9 @@
+  * SPDX-License-Identifier: MIT
   */
  
++#include "util/u_xclipse.h"
  #include "aco_ir.h"
 +#include "util/u_debug.h"
  
  #include "util/bitset.h"
  #include "util/enum_operators.h"
-@@ -3037,6 +3038,9 @@ dot2_can_use_vopd(ra_ctx& ctx, Instruction* instr)
+@@ -3037,6 +3039,9 @@ dot2_can_use_vopd(ra_ctx& ctx, Instruction* instr)
     if (instr->format != Format::VOP3P || ctx.program->wave_size == 64 ||
         ctx.program->gfx_level < GFX11 || instr->valu().clamp)
        return false;
 +   /* Xclipse 920: no VOPD */
-+   if (debug_get_bool_option("ACO_XCLIPSE", false))
++   if (util_xclipse920())
 +      return false;
  
     if (!instr->operands[2].isOfType(RegType::vgpr) || !instr->operands[2].isKillBeforeDef() ||
         (!instr->operands[0].isOfType(RegType::vgpr) && !instr->operands[1].isOfType(RegType::vgpr)))
 diff --git a/src/amd/compiler/aco_scheduler_ilp.cpp b/src/amd/compiler/aco_scheduler_ilp.cpp
-index 8aea9f5..855c77f 100644
+index 8aea9f5..16b56e5 100644
 --- a/src/amd/compiler/aco_scheduler_ilp.cpp
 +++ b/src/amd/compiler/aco_scheduler_ilp.cpp
-@@ -4,6 +4,7 @@
+@@ -3,7 +3,9 @@
+  * SPDX-License-Identifier: MIT
   */
  
++#include "util/u_xclipse.h"
  #include "aco_ir.h"
 +#include "util/u_debug.h"
  
  #include "util/bitscan.h"
  #include "util/bitset.h"
-@@ -1042,6 +1043,9 @@ schedule_ilp(Program* program)
+@@ -1042,6 +1044,9 @@ schedule_ilp(Program* program)
  void
  schedule_vopd(Program* program)
  {
 +   /* Xclipse 920: no VOPD, a v_dual_* instruction hangs the GPU (no wave left, SPI busy) */
-+   if (debug_get_bool_option("ACO_XCLIPSE", false))
++   if (util_xclipse920())
 +      return;
     if (program->gfx_level < GFX11 || program->wave_size != 32)
        return;
  
 diff --git a/src/amd/vulkan/radv_cmd_buffer.c b/src/amd/vulkan/radv_cmd_buffer.c
-index 6abb751..ddc9c42 100644
+index 6abb751..c7acfae 100644
 --- a/src/amd/vulkan/radv_cmd_buffer.c
 +++ b/src/amd/vulkan/radv_cmd_buffer.c
-@@ -15303,7 +15303,16 @@ radv_get_dispatch_params(const struct radv_cmd_buffer *cmd_buffer, const struct
+@@ -8,6 +8,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "radv_cmd_buffer.h"
+ #include "meta/radv_meta.h"
+ #include "tools/radv_debug_hang.h"
+@@ -15303,7 +15304,16 @@ radv_get_dispatch_params(const struct radv_cmd_buffer *cmd_buffer, const struct
        memcpy(params->dim, info->blocks, sizeof(params->dim));
        memcpy(params->start, info->offsets, sizeof(params->start));
  
@@ -336,7 +376,7 @@ index 6abb751..ddc9c42 100644
 +      /* Xclipse 920: partial thread groups (PARTIAL_TG_EN + NUM_THREAD_PARTIAL) hang it and Samsung's
 +       * driver never uses them; launch whole groups, the extra threads hit out-of-bounds accesses.
 +       */
-+      if (info->unaligned && getenv("ACO_XCLIPSE")) {
++      if (info->unaligned && util_xclipse920()) {
 +         for (unsigned i = 0; i < 3; ++i) {
 +            assert(params->start[i] % cs_block_size[i] == 0);
 +            params->dim[i] = DIV_ROUND_UP(params->dim[i], cs_block_size[i]);
@@ -346,16 +386,46 @@ index 6abb751..ddc9c42 100644
           /* If aligned, these should be an entire block size, not 0. */
           params->num_thread_partial[0] =
              params->dim[0] + cs_block_size[0] - ALIGN_NPOT(params->dim[0], cs_block_size[0]);
+diff --git a/src/amd/vulkan/radv_instance.c b/src/amd/vulkan/radv_instance.c
+index ea450f1..f221a2b 100644
+--- a/src/amd/vulkan/radv_instance.c
++++ b/src/amd/vulkan/radv_instance.c
+@@ -8,6 +8,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #ifdef HAVE_VALGRIND
+ #include <memcheck.h>
+ #include <valgrind.h>
+@@ -277,6 +278,9 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo, const VkAllocationC
+    simple_mtx_init(&instance->shader_dump_mtx, mtx_plain);
+ 
+    parse_debug_bitset(os_get_option("RADV_DEBUG"), radv_debug_options, instance->debug_flags);
++   /* Xclipse 920: DCC surfaces still hang it */
++   if (util_xclipse920())
++      BITSET_SET(instance->debug_flags, RADV_DEBUG_NO_DCC);
+    instance->perftest_flags = parse_debug_string(os_get_option("RADV_PERFTEST"), radv_perftest_options);
+    instance->experimental_flags = parse_debug_string(os_get_option("RADV_EXPERIMENTAL"), radv_experimental_options);
+    instance->trap_excp_flags = parse_debug_string(os_get_option("RADV_TRAP_HANDLER_EXCP"), radv_trap_excp_options);
 diff --git a/src/amd/vulkan/radv_queue.c b/src/amd/vulkan/radv_queue.c
-index 80cfc66..64a8137 100644
+index 80cfc66..f428b60 100644
 --- a/src/amd/vulkan/radv_queue.c
 +++ b/src/amd/vulkan/radv_queue.c
-@@ -463,6 +463,12 @@ radv_emit_graphics_scratch(struct radv_device *device, struct radv_cmd_stream *c
+@@ -8,6 +8,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "radv_queue.h"
+ #include "tools/radv_debug_hang.h"
+ #include "tools/radv_debug_nir.h"
+@@ -463,6 +464,12 @@ radv_emit_graphics_scratch(struct radv_device *device, struct radv_cmd_stream *c
     const struct radeon_info *gpu_info = &pdev->info;
     uint32_t tmpring_size;
  
 +   /* Xclipse 920: Samsung's driver always programs the wave count (192), also without scratch */
-+   if (!scratch_bo && getenv("ACO_XCLIPSE")) {
++   if (!scratch_bo && util_xclipse920()) {
 +      radeon_begin(cs);
 +      radeon_set_context_reg(R_0286E8_SPI_TMPRING_SIZE, S_0286E8_WAVES(192));
 +      radeon_end();
@@ -363,12 +433,12 @@ index 80cfc66..64a8137 100644
     if (!scratch_bo)
        return;
  
-@@ -488,6 +494,12 @@ radv_emit_compute_scratch(struct radv_device *device, struct radv_cmd_stream *cs
+@@ -488,6 +495,12 @@ radv_emit_compute_scratch(struct radv_device *device, struct radv_cmd_stream *cs
     if (!compute_scratch_bo && device->compiler_info.key.mitigate_smem_oob)
        compute_scratch_bo = device->zero_bo;
  
 +   /* Xclipse 920: Samsung's driver always programs the wave count (192), also without scratch */
-+   if (!compute_scratch_bo && getenv("ACO_XCLIPSE")) {
++   if (!compute_scratch_bo && util_xclipse920()) {
 +      radeon_begin(cs);
 +      radeon_set_sh_reg(R_00B860_COMPUTE_TMPRING_SIZE, S_00B860_WAVES(192));
 +      radeon_end();
@@ -445,14 +515,22 @@ index dc631b4..3a872df 100644
     };
  
 diff --git a/src/gallium/drivers/radeonsi/gfx/si_shader.c b/src/gallium/drivers/radeonsi/gfx/si_shader.c
-index 8969699..f24d353 100644
+index 8969699..14d3ca1 100644
 --- a/src/gallium/drivers/radeonsi/gfx/si_shader.c
 +++ b/src/gallium/drivers/radeonsi/gfx/si_shader.c
-@@ -127,6 +127,8 @@ unsigned si_get_max_workgroup_size(const struct si_shader *shader)
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "ac_nir.h"
+ #include "ac_rtld.h"
+ #include "ac_shader_util.h"
+@@ -127,6 +128,8 @@ unsigned si_get_max_workgroup_size(const struct si_shader *shader)
     case MESA_SHADER_VERTEX:
     case MESA_SHADER_TESS_EVAL:
        /* Use the largest workgroup size for streamout */
-+      if (shader->key.ge.as_ngg && getenv("ACO_XCLIPSE"))
++      if (shader->key.ge.as_ngg && util_xclipse920())
 +         return 64;
        if (shader->key.ge.as_ngg)
           return shader->info.num_streamout_vec4s ? 256 : 128;
@@ -523,10 +601,18 @@ index 9b9112d..eeac8c2 100644
        if (tex->cmask_buffer != &tex->buffer) {
           si_resource_reference(&tex->cmask_buffer, NULL);
 diff --git a/src/gallium/drivers/radeonsi/si_pipe.c b/src/gallium/drivers/radeonsi/si_pipe.c
-index 04207e1..95715b0 100644
+index 04207e1..aa9c823 100644
 --- a/src/gallium/drivers/radeonsi/si_pipe.c
 +++ b/src/gallium/drivers/radeonsi/si_pipe.c
-@@ -265,6 +265,17 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
+@@ -5,6 +5,7 @@
+  * SPDX-License-Identifier: MIT
+  */
+ 
++#include "util/u_xclipse.h"
+ #include "si_pipe.h"
+ #include "gfx/si_gfx.h"
+ #include "mm/si_mm.h"
+@@ -265,6 +266,17 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
     return &sscreen->b;
  }
  
@@ -544,6 +630,16 @@ index 04207e1..95715b0 100644
  struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_config *config)
  {
     struct radeon_winsys *rw = NULL;
+@@ -289,6 +301,9 @@ struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_conf
+ 
+    uint64_t debug_flags = debug_get_flags_option("R600_DEBUG", radeonsi_debug_options, 0);
+    debug_flags |= debug_get_flags_option("AMD_DEBUG", radeonsi_debug_options, 0);
++   /* Xclipse 920: DCC surfaces still hang it */
++   if (util_xclipse920())
++      debug_flags |= DBG(NO_DCC);
+ 
+    if (debug_flags & DBG(SAFEST)) {
+       debug_flags |= DBG(SAFER);
 diff --git a/src/gallium/drivers/radeonsi/si_pipe.h b/src/gallium/drivers/radeonsi/si_pipe.h
 index 3e0a371..eed1d88 100644
 --- a/src/gallium/drivers/radeonsi/si_pipe.h
@@ -700,10 +796,18 @@ index cf3d40d..0594a45 100644
    link_with : libloader,
    c_args : [renderonly_drivers_c_args],
 diff --git a/src/loader/loader.c b/src/loader/loader.c
-index 50426eb..d65abf2 100644
+index 50426eb..80b301b 100644
 --- a/src/loader/loader.c
 +++ b/src/loader/loader.c
-@@ -259,8 +259,12 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+@@ -26,6 +26,7 @@
+  *    Rob Clark <robclark@freedesktop.org>
+  */
+ 
++#include "util/u_xclipse.h"
+ #include <dlfcn.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -259,8 +260,12 @@ loader_open_render_node_platform_devices(const char * const drivers[],
     for (i = 0; i < num_devices; i++) {
        device = devices[i];
  
@@ -713,7 +817,101 @@ index 50426eb..d65abf2 100644
 -          (device->bustype == DRM_BUS_PLATFORM)) {
 +          (device->bustype == DRM_BUS_PLATFORM ||
 +           (device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == 0x1002 &&
-+            device->deviceinfo.pci->device_id == 0x163f && getenv("ACO_XCLIPSE")))) {
++            device->deviceinfo.pci->device_id == 0x163f && util_xclipse920()))) {
           drmVersionPtr version;
           bool found = false;
  
+@@ -330,6 +335,20 @@ loader_get_render_node(dev_t device)
+       render_node = strdup(dev_ptr->nodes[DRM_NODE_RENDER]);
+       if (!render_node)
+          log_(_LOADER_DEBUG, "MESA-LOADER: failed to allocate memory for render node\n");
++   } else if (util_xclipse920()) {
++      /* Exynos 2200: the compositor's display device (simpledrm) has no render node; its
++       * GPU is the Xclipse 920 (kmsro pairs them the same way) */
++      drmDevicePtr devices[MAX_DRM_DEVICES];
++      int n = drmGetDevices2(0, devices, MAX_DRM_DEVICES);
++
++      for (int i = 0; i < n && !render_node; i++) {
++         if ((devices[i]->available_nodes & (1 << DRM_NODE_RENDER)) &&
++             devices[i]->bustype == DRM_BUS_PCI && devices[i]->deviceinfo.pci->vendor_id == 0x1002 &&
++             devices[i]->deviceinfo.pci->device_id == 0x163f)
++            render_node = strdup(devices[i]->nodes[DRM_NODE_RENDER]);
++      }
++      if (n > 0)
++         drmFreeDevices(devices, n);
+    }
+ 
+    drmFreeDevice(&dev_ptr);
+diff --git a/src/util/u_xclipse.h b/src/util/u_xclipse.h
+new file mode 100644
+index 0000000..f3e5b68
+--- /dev/null
++++ b/src/util/u_xclipse.h
+@@ -0,0 +1,67 @@
++/*
++ * Copyright 2026 Mesa contributors
++ * SPDX-License-Identifier: MIT
++ */
++#ifndef U_XCLIPSE_H
++#define U_XCLIPSE_H
++
++#include <dirent.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++/*
++ * Samsung Xclipse 920 (Exynos 2200) on mainline amdgpu: its registers are GC 10.3 (it runs
++ * as a Van Gogh, PCI 1002:163f), but the shader ISA and ABI, descriptors and formats are
++ * gfx11's, and VOPD and s_delay_alu hang it. The kernel marks it with the PCI subsystem id
++ * 144d:0920 (Samsung). ACO_XCLIPSE=0/1 overrides the detection.
++ */
++static inline bool
++util_xclipse920_detect(void)
++{
++   const char *e = getenv("ACO_XCLIPSE");
++   bool found = false;
++   DIR *d;
++   struct dirent *de;
++
++   if (e && *e)
++      return strcmp(e, "0") != 0 && strcmp(e, "false") != 0;
++
++   d = opendir("/sys/bus/pci/devices");
++   if (!d)
++      return false;
++   while (!found && (de = readdir(d))) {
++      char path[320];
++      unsigned v[3] = {0};
++      const char *names[3] = {"device", "subsystem_vendor", "subsystem_device"};
++      bool ok = true;
++
++      if (de->d_name[0] == '.')
++         continue;
++      for (int i = 0; i < 3 && ok; i++) {
++         FILE *f;
++
++         snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/%s", de->d_name, names[i]);
++         f = fopen(path, "r");
++         ok = f && fscanf(f, "%x", &v[i]) == 1;
++         if (f)
++            fclose(f);
++      }
++      found = ok && v[0] == 0x163f && v[1] == 0x144d && v[2] == 0x0920;
++   }
++   closedir(d);
++   return found;
++}
++
++static inline bool
++util_xclipse920(void)
++{
++   static int cached = -1;
++
++   if (cached < 0)
++      cached = util_xclipse920_detect();
++   return cached;
++}
++
++#endif

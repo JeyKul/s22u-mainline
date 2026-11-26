@@ -1,5 +1,20 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (night 2): Mesa finds the Xclipse itself; GPU thermal limit; Mesa builds on the PC
+- Detection: the emulated PCI function has subsystem 144d:0920 (patch 0038); Mesa's util_xclipse920()
+  (src/util/u_xclipse.h) checks it in sysfs and replaces every ACO_XCLIPSE switch (ACO_XCLIPSE=0/1
+  still overrides). No DCC on the Xclipse is now a Mesa default (Samsung's driver never enables DCC on
+  its render targets either). xclipse-env only sets the /opt/mesa-xc paths.
+- Wayland clients under KWin: KWin's dmabuf feedback names simpledrm (card0, no render node); the loader
+  now maps such a display device to the Xclipse render node -> eglinfo: radeonsi, GL 4.6 core.
+- Thermal: governor reads G3D temperature via ACPM TMU (ch 7, tz 3, whole C), every 500 ms; cap -1 level
+  per reading from 85 C, +1 below 77 C; without readings max 903 MHz. Default cap 1095 MHz now.
+  refract 70 s under KWin: 1095 MHz 73->85 C, then 999/903/807 MHz holding ~81 C; idle 52 C @303.
+- refract under KWin only 90 FPS average (labwc earlier ~600 @903): not looked at yet.
+- tools/mesa-cross.sh: sysroot from the phone (~2.2 GB in ~/s22u-android), clang cross build, deploy to
+  /opt/mesa-xc by rename. Full build ~40 s on the PC (phone: ~30 min). The phone's own build tree had
+  corrupt objects after an unclean reset (resolved by a clean build); prefer the PC build.
+
 ## 2026-11-26 (late): PLASMA MOBILE, rendered by the Xclipse 920 (default session)
 - LightDM autologin session plasma-mobile-xclipse (/usr/local/bin/plasma-mobile-xclipse): KWin with
   KWIN_DRM_DEVICES=simpledrm card; GBM on it is backed by radeonsi through Mesa's kmsro. KWin: 1 screen,

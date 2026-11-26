@@ -1,0 +1,136 @@
+From 7e63c342dfe88954cb369d041c4bd0a534af9e0b Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 19:43:59 +0100
+Subject: [PATCH 38/38] soc: samsung: exynos2200-g3d: thermal limit for the GPU
+ governor; PCI subsystem 144d:0920
+
+The governor reads the G3D temperature from Samsung's TMU through ACPM
+(channel 7, thermal zone 3) every 500 ms. From gov_hot_c (85 C) it lowers its
+cap one level per reading and raises it again gov_hyst_c (8 C) below; without
+readings it stays at or under 903 MHz. Default cap 1095 MHz.
+
+The emulated PCI function gets the subsystem id 144d:0920 (Samsung), so user
+space can tell the Xclipse 920 from a Van Gogh with the same device id.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pci/controller/pci-exynos2200-gpu.c |  7 ++-
+ drivers/soc/samsung/exynos2200-g3d.c        | 50 +++++++++++++++++++--
+ 2 files changed, 51 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/pci/controller/pci-exynos2200-gpu.c b/drivers/pci/controller/pci-exynos2200-gpu.c
+index 17ca729eb..b69549472 100644
+--- a/drivers/pci/controller/pci-exynos2200-gpu.c
++++ b/drivers/pci/controller/pci-exynos2200-gpu.c
+@@ -29,6 +29,9 @@
+ 
+ #define GPU_VENDOR	0x1002
+ #define GPU_DEVICE	0x163f	/* Van Gogh: amdgpu's APU paths */
++/* subsystem: Samsung, "0920": tells user space (Mesa) this is the Xclipse 920, not a Van Gogh */
++#define GPU_SUBVENDOR	0x144d
++#define GPU_SUBDEVICE	0x0920
+ #define GPU_CLASS	0x038000	/* display controller, not VGA */
+ #define GPU_REV		0x00
+ 
+@@ -57,8 +60,8 @@ static void cfg_init(struct exynos2200_gpu_pci *g)
+ 	*(u16 *)&c[PCI_STATUS] = PCI_STATUS_CAP_LIST;
+ 	*(u32 *)&c[PCI_CLASS_REVISION] = GPU_CLASS << 8 | GPU_REV;
+ 	c[PCI_HEADER_TYPE] = PCI_HEADER_TYPE_NORMAL;
+-	*(u16 *)&c[PCI_SUBSYSTEM_VENDOR_ID] = GPU_VENDOR;
+-	*(u16 *)&c[PCI_SUBSYSTEM_ID] = GPU_DEVICE;
++	*(u16 *)&c[PCI_SUBSYSTEM_VENDOR_ID] = GPU_SUBVENDOR;
++	*(u16 *)&c[PCI_SUBSYSTEM_ID] = GPU_SUBDEVICE;
+ 	c[PCI_CAPABILITY_LIST] = CAP_PCIE;
+ 	c[PCI_INTERRUPT_PIN] = 1;	/* INTA */
+ 
+diff --git a/drivers/soc/samsung/exynos2200-g3d.c b/drivers/soc/samsung/exynos2200-g3d.c
+index 6dabaf9c3..9c256cdf3 100644
+--- a/drivers/soc/samsung/exynos2200-g3d.c
++++ b/drivers/soc/samsung/exynos2200-g3d.c
+@@ -112,7 +112,7 @@ struct exynos2200_g3d {
+ 	struct acpm_handle *acpm;
+ 	struct hrtimer gov_timer;
+ 	struct work_struct gov_work;
+-	unsigned int gov_busy, gov_samples, gov_level;
++	unsigned int gov_busy, gov_samples, gov_level, gov_windows, gov_cap;
+ 	bool gov_running;
+ };
+ 
+@@ -156,9 +156,28 @@ void exynos2200_g3d_set_gpu_ops(bool (*busy)(void *data), int (*quiesce)(void *d
+ }
+ EXPORT_SYMBOL_GPL(exynos2200_g3d_set_gpu_ops);
+ 
+-static unsigned int gov_max_khz = 903000;
++/*
++ * G3D temperature from Samsung's TMU through ACPM (channel 7, thermal zone 3, whole
++ * degrees), read every 500 ms. Above gov_hot_c the governor steps down one level per
++ * window and holds there until it is gov_hyst_c cooler. Without readings it stays at
++ * or below 903 MHz.
++ */
++#define G3D_ACPM_TMU_CHAN	7
++#define G3D_TMU_TZ		3
++#define G3D_GOV_TEMP_WINDOWS	10
++#define G3D_SAFE_KHZ		903000
++
++static unsigned int gov_max_khz = 1095000;
+ module_param(gov_max_khz, uint, 0644);
+ MODULE_PARM_DESC(gov_max_khz, "highest G3D clock the governor requests (kHz)");
++static int gov_temp_c = -1;
++module_param(gov_temp_c, int, 0444);
++MODULE_PARM_DESC(gov_temp_c, "last G3D temperature (deg C), -1: no reading");
++static int gov_hot_c = 85;
++module_param(gov_hot_c, int, 0644);
++MODULE_PARM_DESC(gov_hot_c, "G3D temperature from which the governor throttles (deg C)");
++static int gov_hyst_c = 8;
++module_param(gov_hyst_c, int, 0644);
+ static bool gov_enable = true;
+ module_param(gov_enable, bool, 0644);
+ MODULE_PARM_DESC(gov_enable, "GPU DVFS governor on (off: G3D stays where it is)");
+@@ -446,8 +465,24 @@ static void g3d_gov_work(struct work_struct *w)
+ 	int ret;
+ 
+ 	g->gov_busy = 0;
+-	while (max + 1 < ARRAY_SIZE(g3d_levels_khz) && g3d_levels_khz[max + 1] <= gov_max_khz)
++	if (++g->gov_windows >= G3D_GOV_TEMP_WINDOWS) {
++		int t;
++
++		g->gov_windows = 0;
++		if (!g->acpm->ops->tmu.read_temp ||
++		    g->acpm->ops->tmu.read_temp(g->acpm, G3D_ACPM_TMU_CHAN, G3D_TMU_TZ, &t) ||
++		    t <= 0 || t > 150)
++			t = -1;
++		gov_temp_c = t;
++		if (t >= gov_hot_c && g->gov_cap)
++			g->gov_cap--;		/* hot: one level lower */
++		else if (t >= 0 && t < gov_hot_c - gov_hyst_c && g->gov_cap < ARRAY_SIZE(g3d_levels_khz) - 1)
++			g->gov_cap++;		/* cooled down: allow one more */
++	}
++	while (max + 1 < ARRAY_SIZE(g3d_levels_khz) && g3d_levels_khz[max + 1] <= gov_max_khz &&
++	       (gov_temp_c >= 0 || g3d_levels_khz[max + 1] <= G3D_SAFE_KHZ))
+ 		max++;
++	max = min(max, g->gov_cap);
+ 	if (!gov_enable)
+ 		return;
+ 	if (busy > 85)
+@@ -512,10 +547,17 @@ static void g3d_gov_start(struct exynos2200_g3d *g)
+ 		return;
+ 	}
+ 	INIT_WORK(&g->gov_work, g3d_gov_work);
++	g->gov_cap = ARRAY_SIZE(g3d_levels_khz) - 1;
+ 	hrtimer_setup(&g->gov_timer, g3d_gov_tick, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	g->gov_running = true;
+ 	hrtimer_start(&g->gov_timer, ns_to_ktime(G3D_GOV_SAMPLE_NS), HRTIMER_MODE_REL);
+-	dev_info(g->dev, "GPU DVFS governor on, up to %u kHz\n", gov_max_khz);
++	{
++		int t = -1, ret = g->acpm->ops->tmu.read_temp ?
++			g->acpm->ops->tmu.read_temp(g->acpm, G3D_ACPM_TMU_CHAN, G3D_TMU_TZ, &t) : -ENODEV;
++
++		dev_info(g->dev, "GPU DVFS governor on, up to %u kHz; G3D temperature %d C (%d)\n",
++			 gov_max_khz, t, ret);
++	}
+ }
+ 
+ static void g3d_gov_stop(struct exynos2200_g3d *g)
+-- 
+2.56.1
+
