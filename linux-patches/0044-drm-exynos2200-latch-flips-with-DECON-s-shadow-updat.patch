@@ -1,0 +1,112 @@
+From 15dc34b965660a43c1f18ef468143b32755a6c99 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:47:51 +0100
+Subject: [PATCH 44/44] drm/exynos2200: latch flips with DECON's shadow update;
+ connector always connected
+
+Request a global + all-windows shadow update after writing DPP0's address:
+DECON latches it at the next frame start (window 0 alone never reaches DPP0).
+The event goes out from the first frame-done interrupt that finds the request
+consumed. Replaces forcing DPP0's latch from the interrupt handler.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/exynos2200/exynos2200_decon.c | 40 ++++++++++---------
+ 1 file changed, 22 insertions(+), 18 deletions(-)
+
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_decon.c b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+index d0b3d6dc6..d779ec4ff 100644
+--- a/drivers/gpu/drm/exynos2200/exynos2200_decon.c
++++ b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+@@ -8,9 +8,10 @@
+  *
+  * - buffers are physically contiguous (GEM DMA, CMA): the DPU's SysMMU is not driven
+  *   yet, DPP0 reads physical addresses as S-Boot left it;
+- * - a flip writes DPP0's base address and stride and forces its shadow registers to
+- *   latch (RDMA_ENABLE.IDMA_SFR_UPDATE_FORCE) from DECON's frame-done interrupt: in
+- *   command mode DECON is idle between a frame and the next TE, so this cannot tear;
++ * - a flip writes DPP0's base address and stride and requests a DECON shadow update
++ *   (global and all windows: window 0 alone does not reach DPP0); the hardware latches
++ *   it at the next frame start, so it cannot tear. The event goes out from the first
++ *   frame-done interrupt that finds the request consumed;
+  * - vblank is DECON's frame done (one per TE, 120 per second).
+  *
+  * Register names follow Samsung's DPU cal (regs-decon.h, regs-dpp.h).
+@@ -44,12 +45,15 @@
+ #define DECON_INT_EN		0x0060
+ #define INT_EN_FRAME_DONE	BIT(13)
+ #define INT_EN			BIT(0)
++#define SHD_REG_UP_REQ		0x0050
++#define SHD_REG_UP_REQ_GLOBAL	BIT(31)
++#define SHD_REG_UP_REQ_WINS	0xffff
+ #define DECON_INT_PEND		0x0070
+ #define INT_PEND_FRAME_DONE	BIT(13)
+ 
+ /* DPP0 DMA (RDMA) */
+ #define RDMA_ENABLE		0x0000
+-#define IDMA_SFR_UPDATE_FORCE	BIT(4)
++#define IDMA_SFR_UPDATE_FORCE	BIT(4)		/* latch now: only when DECON is stopped */
+ #define RDMA_SRC_WIDTH		0x0010		/* line stride, in pixels */
+ #define RDMA_BASEADDR_P0	0x0040
+ #define DMA_SHD_OFFSET		0x0400		/* active (shadow) copies */
+@@ -66,10 +70,7 @@ struct e2200_decon {
+ 	void __iomem *decon, *dma;
+ 	resource_size_t boot_fb, boot_fb_size;
+ 
+-	spinlock_t lock;		/* pending flip, event */
+-	dma_addr_t pending_addr;
+-	u32 pending_stride;
+-	bool pending;
++	spinlock_t lock;		/* event */
+ 	struct drm_pending_vblank_event *event;
+ };
+ 
+@@ -87,12 +88,9 @@ static irqreturn_t e2200_decon_irq(int irq, void *data)
+ 	writel(INT_PEND_FRAME_DONE, d->decon + DECON_INT_PEND);
+ 
+ 	spin_lock_irqsave(&d->lock, flags);
+-	if (d->pending) {
+-		/* the frame went out; DPP0 is idle until the next TE */
+-		writel(d->pending_stride, d->dma + RDMA_SRC_WIDTH);
+-		writel(lower_32_bits(d->pending_addr), d->dma + RDMA_BASEADDR_P0);
+-		writel(readl(d->dma + RDMA_ENABLE) | IDMA_SFR_UPDATE_FORCE, d->dma + RDMA_ENABLE);
+-		d->pending = false;
++	/* the flip is on screen once DECON consumed the shadow update request */
++	if (d->event && !(readl(d->decon + SHD_REG_UP_REQ) &
++			  (SHD_REG_UP_REQ_GLOBAL | SHD_REG_UP_REQ_WINS))) {
+ 		event = d->event;	/* the old buffer is free from here on */
+ 		d->event = NULL;
+ 	}
+@@ -115,11 +113,11 @@ static void e2200_decon_set_fb(struct e2200_decon *d, struct drm_plane_state *st
+ 	unsigned long flags;
+ 
+ 	spin_lock_irqsave(&d->lock, flags);
+-	d->pending_addr = drm_fb_dma_get_gem_addr(fb, state, 0);
+-	d->pending_stride = fb->pitches[0] / fb->format->cpp[0];
+-	d->pending = true;
++	writel(fb->pitches[0] / fb->format->cpp[0], d->dma + RDMA_SRC_WIDTH);
++	writel(lower_32_bits(drm_fb_dma_get_gem_addr(fb, state, 0)), d->dma + RDMA_BASEADDR_P0);
++	writel(SHD_REG_UP_REQ_GLOBAL | SHD_REG_UP_REQ_WINS, d->decon + SHD_REG_UP_REQ);
+ 	if (event && !drm_crtc_vblank_get(&d->pipe.crtc)) {
+-		d->event = event;	/* sent once the flip is applied */
++		d->event = event;	/* sent once the update is latched */
+ 		event = NULL;
+ 	}
+ 	spin_unlock_irqrestore(&d->lock, flags);
+@@ -231,7 +229,13 @@ static const struct drm_connector_helper_funcs e2200_connector_helper_funcs = {
+ 	.get_modes = e2200_connector_get_modes,
+ };
+ 
++static enum drm_connector_status e2200_connector_detect(struct drm_connector *connector, bool force)
++{
++	return connector_status_connected;	/* the built-in panel */
++}
++
+ static const struct drm_connector_funcs e2200_connector_funcs = {
++	.detect = e2200_connector_detect,
+ 	.fill_modes = drm_helper_probe_single_connector_modes,
+ 	.destroy = drm_connector_cleanup,
+ 	.reset = drm_atomic_helper_connector_reset,
+-- 
+2.56.1
+

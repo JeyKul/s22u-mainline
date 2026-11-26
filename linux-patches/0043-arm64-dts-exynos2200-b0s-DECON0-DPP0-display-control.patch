@@ -1,7 +1,7 @@
 From 60f15085647e854bc390b34ff8b264192e0290dc Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:31:46 +0100
-Subject: [PATCH 43/43] arm64: dts: exynos2200-b0s: DECON0/DPP0 display
+Subject: [PATCH 43/44] arm64: dts: exynos2200-b0s: DECON0/DPP0 display
  controller
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

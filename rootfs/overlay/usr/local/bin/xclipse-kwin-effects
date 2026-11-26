@@ -1,0 +1,7 @@
+#!/bin/sh
+# Plasma Mobile turns KWin's blur off (immutable default, for weak GPUs); the Xclipse 920 has
+# the headroom, so load it once the session is up.
+sleep 3
+for e in blur; do
+	qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect "$e" >/dev/null 2>&1
+done

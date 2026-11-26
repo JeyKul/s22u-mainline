@@ -1,7 +1,7 @@
 From bcc9952f1918c2f95170c1d38b4cae45de02acd3 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 17:05:40 +0100
-Subject: [PATCH 35/43] drm/sysfb: simpledrm: 256-byte aligned dumb buffer
+Subject: [PATCH 35/44] drm/sysfb: simpledrm: 256-byte aligned dumb buffer
  pitch
 
 A GPU can then import simpledrm's dumb buffers as linear render targets

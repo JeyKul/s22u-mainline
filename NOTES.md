@@ -18,6 +18,12 @@
   simpledrm otherwise. 1 screen at 120 Hz, GLES on radeonsi, zero-copy flips.
 - "Laggy" was plasmashell at 183 % CPU: ~/.config/kdeglobals had [QtQuickRendererSettings]
   SceneGraphBackend=software (saved back when GL did not work). Removed -> Qt Quick on the GPU, smooth.
+- Flips now use DECON SHD_REG_UP_REQ = global | 0xffff (all windows; window 0 alone never latched
+  DPP0), latched by hardware at the next frame start; event once the request bits are clear.
+  tools/flipbar.c (KMS tear test without compositor): clean. User saw occasional tear lines in
+  Plasma before this change; later "all looks fine". KWin commits once per vblank (~8 ms).
+- Blur: Plasma Mobile's envmanager sets KWin blurEnabled[$i]=false; /etc/xdg/autostart
+  xclipse-kwin-effects loads it after login. Mobile shell's own blur is QML (wallpaper areas only).
 - Open: Xwayland "EGL setup failed, disabling glamor"; panel off/on and 60 Hz need stage 2 (own
   DSIM/panel init); SysMMU (stage 3) for more planes/zero-copy of any buffer; module not yet in the
   rootfs overlay/installer.

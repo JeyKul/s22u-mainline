@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=KWin effects for the Xclipse GPU
+Exec=/usr/local/bin/xclipse-kwin-effects
+OnlyShowIn=KDE;
+NoDisplay=true
+X-KDE-autostart-phase=2
