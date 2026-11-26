@@ -1,7 +1,7 @@
 From 522af002b8099fea92fd6dffcbb4185c5a70c3a8 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 16:50:45 +0100
-Subject: [PATCH 34/35] WIP: drm/amdgpu: Xclipse 920: Samsung sgpu ioctls, IB
+Subject: [PATCH 34/37] WIP: drm/amdgpu: Xclipse 920: Samsung sgpu ioctls, IB
  capture and patch knobs
 
 Samsung's user-space driver (vulkan.samsung.so) calls three sgpu ioctls on

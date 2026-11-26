@@ -41,7 +41,7 @@ minimum target: GPU, display, HDMI.
 |---|---|---|
 | **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | simpledrm on S-Boot's framebuffer; DSIM taken over (commands work). Next: DECON/DPP DRM driver (page flip, vblank), blanking, 120 Hz |
 | Brightness | ✅ | `/sys/class/backlight/panel` (0-2039, DCS 51h): DSIM re-initialised with Samsung's cal so commands reach the panel |
-| **Goal** GPU: Xclipse 920 (RDNA2-style GC 10.3 regs, **gfx11 shader ISA** "gfx1040") | 🟡 | Mainline amdgpu: init, GFX ring + IB tests pass. Mesa (mesa-patches/, `ACO_XCLIPSE=1`): **RADV and radeonsi draw correct triangles** (GLES 2222 FPS offscreen). Xclipse needs gfx11 shader ABI/descriptors/formats, and no VOPD or s_delay_alu. DCC, DVFS, display integration open. See NOTES.md |
+| **Goal** GPU: Xclipse 920 (RDNA2-style GC 10.3 regs, **gfx11 shader ISA** "gfx1040") | 🟡 | Mainline amdgpu: init, GFX ring + IB tests pass. Mesa (mesa-patches/, `ACO_XCLIPSE=1`): **RADV and radeonsi draw correct triangles** (GLES 2222 FPS offscreen). Xclipse needs gfx11 shader ABI/descriptors/formats, and no VOPD or s_delay_alu. GPU DVFS 303-903 MHz (governor). DCC, display driver open. See NOTES.md |
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |
 | Video decode/encode (MFC) | ⬜ | |
 | Touchscreen: STM FTS2BA61Y on SPI2 | ✅ | Multitouch (`stm-fts-spi`, new driver); rails from the PMIC. SPI needs `fifo-depth = <256>` (USI02) |

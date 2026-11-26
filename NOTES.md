@@ -1,5 +1,17 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (night): GPU DVFS governor (303 -> 903 MHz under load)
+- exynos2200-g3d (patch 0036): 2 ms busy sampling through an amdgpu hook (fences queued on the
+  gfx/compute rings; GRBM_STATUS GUI_ACTIVE/CP_BUSY/SPI_BUSY stay set on the Xclipse even when idle,
+  so it is useless), 50 ms window, ACPM DVFS ch 0 id 13. Levels 303/404/500/605/807/903/999/1095/1306
+  MHz (stock min/max from Samsung's sgpu node), default cap gov_max_khz=903000.
+- ACPM sets vdd_g3d itself (BUCK4 main vsel 0x4b): 500 mV @303, 525 @605, 612 @903, 756 @1306.
+- glmark2 refract 344 FPS @303 -> ~600 @903; idle drops back to 303 within 0.5 s.
+- Trap that cost an hour: acpm ops dvfs.set_rate takes Hz (the debugfs converts kHz). Passing kHz
+  asked ACPM for ~0.9 MHz and looked exactly like a GPU hang. BG3D_DVFS_CTL (0x16cd0058) handshake
+  from sgpu is not used (stays 0); untested again since the unit fix.
+- MIF: DT cal id 0xb040000 (ACPM id 0); Samsung locks MIF min by GPU level (mif_min_lock). Not done.
+
 ## 2026-11-26 (evening): GPU-RENDERED DESKTOP. XFCE on labwc (Wayland), composited by the Xclipse 920
 - Boot: xclipse-gpu.service (G3D firmware + amdgpu, /usr/local/sbin/xclipse-gpu-up) before the display
   manager; LightDM autologin session xfce-xclipse (/usr/local/bin/xfce-xclipse-session): labwc renders

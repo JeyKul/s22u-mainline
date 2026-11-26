@@ -1,0 +1,264 @@
+From 2a2056aaf99aa44ba19bda838e52793d4200b1bd Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 17:30:39 +0100
+Subject: [PATCH 36/37] soc: samsung: exynos2200-g3d: GPU DVFS governor
+
+Every 2 ms ask the GPU driver whether work is queued on its rings; every
+50 ms step the G3D clock through Samsung's levels (303 MHz up to
+gov_max_khz, 903 MHz by default) by ACPM DVFS requests (channel 0, id 13).
+ACPM sets vdd_g3d from Samsung's tables itself (500 mV at 303 MHz, 612 mV
+at 903 MHz measured). Module parameters gov_enable, gov_max_khz, gov_cur_khz.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/samsung/exynos2200-g3d.c       | 170 ++++++++++++++++++++-
+ include/linux/soc/samsung/exynos2200-g3d.h |  15 ++
+ 2 files changed, 184 insertions(+), 1 deletion(-)
+ create mode 100644 include/linux/soc/samsung/exynos2200-g3d.h
+
+diff --git a/drivers/soc/samsung/exynos2200-g3d.c b/drivers/soc/samsung/exynos2200-g3d.c
+index eda047e66..6dabaf9c3 100644
+--- a/drivers/soc/samsung/exynos2200-g3d.c
++++ b/drivers/soc/samsung/exynos2200-g3d.c
+@@ -12,6 +12,11 @@
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
+ #include <linux/firmware.h>
++#include <linux/firmware/samsung/exynos-acpm-protocol.h>
++#include <linux/hrtimer.h>
++#include <linux/mutex.h>
++#include <linux/rcupdate.h>
++#include <linux/soc/samsung/exynos2200-g3d.h>
+ #include <linux/io.h>
+ #include <linux/iopoll.h>
+ #include <linux/module.h>
+@@ -102,8 +107,65 @@ struct exynos2200_g3d {
+ 	void *el2_lv3;
+ 	u32 tz_addr;
+ 	struct dentry *dbg;
++
++	/* DVFS governor (see g3d_gov_*) */
++	struct acpm_handle *acpm;
++	struct hrtimer gov_timer;
++	struct work_struct gov_work;
++	unsigned int gov_busy, gov_samples, gov_level;
++	bool gov_running;
++};
++
++/*
++ * GPU DVFS: the GPU driver's busy callback (work queued on its rings; the GRBM
++ * status bits stay set on the Xclipse 920 even when idle) is sampled every 2 ms; every 50 ms the
++ * busy share picks the next G3D level, which is requested from ACPM (it sets
++ * the matching vdd_g3d from Samsung's tables itself). Levels are the stock
++ * ones from Samsung's sgpu node (min 303 MHz, max 1306 MHz); without a GPU
++ * thermal zone the governor stops at gov_max_khz (903 MHz: above it the
++ * gains measured small).
++ */
++#define G3D_ACPM_DVFS_CHAN	0
++#define G3D_ACPM_DVFS_ID	13	/* cal id 0xb04000d */
++#define G3D_GOV_SAMPLE_NS	(2 * NSEC_PER_MSEC)
++#define G3D_GOV_WINDOW		25
++
++static const unsigned int g3d_levels_khz[] = {
++	303000, 404000, 500000, 605000, 807000, 903000, 999000, 1095000, 1306000,
+ };
+ 
++static bool (*g3d_busy_cb)(void *data);
++static int (*g3d_quiesce_cb)(void *data, bool stop);
++static void *g3d_busy_data;
++static DEFINE_MUTEX(g3d_cb_lock);
++
++/*
++ * The GPU driver tells whether it has work queued (busy) and can hold its
++ * submissions and wait for the GPU to go idle (quiesce): a clock switch while
++ * the GPU starts on new work hangs it. NULLs to unregister.
++ */
++void exynos2200_g3d_set_gpu_ops(bool (*busy)(void *data), int (*quiesce)(void *data, bool stop),
++				void *data)
++{
++	mutex_lock(&g3d_cb_lock);
++	WRITE_ONCE(g3d_busy_data, data);
++	WRITE_ONCE(g3d_quiesce_cb, quiesce);
++	WRITE_ONCE(g3d_busy_cb, busy);
++	mutex_unlock(&g3d_cb_lock);
++	synchronize_rcu();
++}
++EXPORT_SYMBOL_GPL(exynos2200_g3d_set_gpu_ops);
++
++static unsigned int gov_max_khz = 903000;
++module_param(gov_max_khz, uint, 0644);
++MODULE_PARM_DESC(gov_max_khz, "highest G3D clock the governor requests (kHz)");
++static bool gov_enable = true;
++module_param(gov_enable, bool, 0644);
++MODULE_PARM_DESC(gov_enable, "GPU DVFS governor on (off: G3D stays where it is)");
++static unsigned int gov_cur_khz;
++module_param(gov_cur_khz, uint, 0444);
++MODULE_PARM_DESC(gov_cur_khz, "G3D clock last requested by the governor (kHz)");
++
+ static void g3d_rmw(struct exynos2200_g3d *g, void __iomem *base, u32 off,
+ 		    u32 mask, u32 val, const char *name)
+ {
+@@ -370,6 +432,101 @@ static int g3d_peek_poke(struct exynos2200_g3d *g, phys_addr_t addr,
+ 	return 0;
+ }
+ 
++static int g3d_set_rate(struct exynos2200_g3d *g, unsigned int khz)
++{
++	return g->acpm->ops->dvfs.set_rate(g->acpm, G3D_ACPM_DVFS_CHAN, G3D_ACPM_DVFS_ID,
++					   khz * 1000UL);
++}
++
++static void g3d_gov_work(struct work_struct *w)
++{
++	struct exynos2200_g3d *g = container_of(w, struct exynos2200_g3d, gov_work);
++	unsigned int busy = g->gov_busy * 100 / G3D_GOV_WINDOW;
++	unsigned int lvl = g->gov_level, max = 0;
++	int ret;
++
++	g->gov_busy = 0;
++	while (max + 1 < ARRAY_SIZE(g3d_levels_khz) && g3d_levels_khz[max + 1] <= gov_max_khz)
++		max++;
++	if (!gov_enable)
++		return;
++	if (busy > 85)
++		lvl += 2;
++	else if (busy > 60)
++		lvl++;
++	else if (busy < 30 && lvl)
++		lvl--;
++	lvl = min(lvl, max);
++	if (lvl == g->gov_level && gov_cur_khz)
++		return;
++	mutex_lock(&g3d_cb_lock);
++	if (!g3d_quiesce_cb) {	/* no GPU driver: nothing to hold, nothing to gain */
++		mutex_unlock(&g3d_cb_lock);
++		return;
++	}
++	ret = g3d_quiesce_cb(g3d_busy_data, true);
++	if (!ret)
++		ret = g3d_set_rate(g, g3d_levels_khz[lvl]);
++	g3d_quiesce_cb(g3d_busy_data, false);
++	mutex_unlock(&g3d_cb_lock);
++	if (ret) {
++		dev_warn_ratelimited(g->dev, "DVFS %u kHz: %d\n", g3d_levels_khz[lvl], ret);
++		return;
++	}
++	g->gov_level = lvl;
++	gov_cur_khz = g3d_levels_khz[lvl];
++}
++
++static enum hrtimer_restart g3d_gov_tick(struct hrtimer *t)
++{
++	struct exynos2200_g3d *g = container_of(t, struct exynos2200_g3d, gov_timer);
++
++	bool (*cb)(void *data);
++
++	rcu_read_lock();
++	cb = READ_ONCE(g3d_busy_cb);
++	if (cb && cb(READ_ONCE(g3d_busy_data)))
++		g->gov_busy++;
++	rcu_read_unlock();
++	if (++g->gov_samples >= G3D_GOV_WINDOW) {
++		g->gov_samples = 0;
++		schedule_work(&g->gov_work);
++	}
++	hrtimer_forward_now(t, ns_to_ktime(G3D_GOV_SAMPLE_NS));
++	return HRTIMER_RESTART;
++}
++
++/* once the GPU is powered and its firmware runs */
++static void g3d_gov_start(struct exynos2200_g3d *g)
++{
++	struct device_node *np;
++
++	if (g->gov_running)
++		return;
++	np = of_find_compatible_node(NULL, NULL, "samsung,exynos2200-acpm-ipc");
++	g->acpm = np ? devm_acpm_get_by_node(g->dev, np) : NULL;
++	of_node_put(np);
++	if (IS_ERR_OR_NULL(g->acpm)) {
++		dev_warn(g->dev, "no ACPM, no GPU DVFS\n");
++		g->acpm = NULL;
++		return;
++	}
++	INIT_WORK(&g->gov_work, g3d_gov_work);
++	hrtimer_setup(&g->gov_timer, g3d_gov_tick, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	g->gov_running = true;
++	hrtimer_start(&g->gov_timer, ns_to_ktime(G3D_GOV_SAMPLE_NS), HRTIMER_MODE_REL);
++	dev_info(g->dev, "GPU DVFS governor on, up to %u kHz\n", gov_max_khz);
++}
++
++static void g3d_gov_stop(struct exynos2200_g3d *g)
++{
++	if (!g->gov_running)
++		return;
++	hrtimer_cancel(&g->gov_timer);
++	cancel_work_sync(&g->gov_work);
++	g->gov_running = false;
++}
++
+ static ssize_t g3d_dbg_write(struct file *f, const char __user *ubuf,
+ 			     size_t count, loff_t *ppos)
+ {
+@@ -393,8 +550,12 @@ static ssize_t g3d_dbg_write(struct file *f, const char __user *ubuf,
+ 		ret = g3d_el2_init(g);
+ 	else if (sysfs_streq(buf, "s2mpufd"))
+ 		ret = g3d_s2mpufd_init(g);
+-	else if (sysfs_streq(buf, "fw"))
++	else if (sysfs_streq(buf, "fw")) {
+ 		ret = g3d_load_fw(g);
++		if (!ret)
++			g3d_gov_start(g);
++	} else if (sysfs_streq(buf, "gov"))
++		g3d_gov_start(g);
+ 	else if (sysfs_streq(buf, "fwcopy")) {
+ 		const struct firmware *fw;
+ 
+@@ -515,9 +676,15 @@ static void exynos2200_g3d_remove(struct platform_device *pdev)
+ {
+ 	struct exynos2200_g3d *g = platform_get_drvdata(pdev);
+ 
++	g3d_gov_stop(g);
+ 	debugfs_remove(g->dbg);
+ }
+ 
++static void exynos2200_g3d_shutdown(struct platform_device *pdev)
++{
++	g3d_gov_stop(platform_get_drvdata(pdev));
++}
++
+ static const struct of_device_id exynos2200_g3d_of_match[] = {
+ 	{ .compatible = "samsung,exynos2200-g3d-power" },
+ 	{ }
+@@ -531,6 +698,7 @@ static struct platform_driver exynos2200_g3d_driver = {
+ 	},
+ 	.probe = exynos2200_g3d_probe,
+ 	.remove = exynos2200_g3d_remove,
++	.shutdown = exynos2200_g3d_shutdown,
+ };
+ static int __init exynos2200_g3d_init(void)
+ {
+diff --git a/include/linux/soc/samsung/exynos2200-g3d.h b/include/linux/soc/samsung/exynos2200-g3d.h
+new file mode 100644
+index 000000000..34db27ad4
+--- /dev/null
++++ b/include/linux/soc/samsung/exynos2200-g3d.h
+@@ -0,0 +1,15 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __LINUX_SOC_SAMSUNG_EXYNOS2200_G3D_H
++#define __LINUX_SOC_SAMSUNG_EXYNOS2200_G3D_H
++
++#include <linux/types.h>
++
++#if IS_ENABLED(CONFIG_EXYNOS2200_G3D_POWER)
++void exynos2200_g3d_set_gpu_ops(bool (*busy)(void *data), int (*quiesce)(void *data, bool stop),
++				void *data);
++#else
++static inline void exynos2200_g3d_set_gpu_ops(bool (*busy)(void *data),
++					      int (*quiesce)(void *data, bool stop), void *data) { }
++#endif
++
++#endif
+-- 
+2.56.1
+
