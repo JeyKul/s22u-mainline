@@ -1,5 +1,20 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (late): PLASMA MOBILE, rendered by the Xclipse 920 (default session)
+- LightDM autologin session plasma-mobile-xclipse (/usr/local/bin/plasma-mobile-xclipse): KWin with
+  KWIN_DRM_DEVICES=simpledrm card; GBM on it is backed by radeonsi through Mesa's kmsro. KWin: 1 screen,
+  scale 3, OpenGL ES on radeonsi; plasma-keyboard is the on-screen keyboard. XFCE sessions stay.
+- Mesa (mesa-patches/xclipse920.diff), so GBM works on simpledrm:
+  - kmsro accepts amdgpu as render GPU (radeonsi_screen_create_renderonly; with_gallium_drm includes
+    radeonsi so kmsro gets built; pipe-loader driver list + loader accept the GPU on its emulated PCI
+    bus, PCI 1002:163f, only with ACO_XCLIPSE).
+  - radeonsi: WINSYS_HANDLE_TYPE_KMS -> dma-buf import into the display device (renderonly, lazily per
+    texture), scan-out textures linear when behind kmsro. si_screen.ro must come after `b`.
+  - tools/gbmtest.c: linear 1440x3088 BO, stride 5888, AddFB2 on card0 = ok.
+- KWin before that: "Skipping KMS incapable drm device" (amdgpu has no display), "Failed to create gbm
+  device" (simpledrm without kmsro) -> rendered to nothing (0 screens).
+- Packages: plasma-mobile 6.8.3, plasma-settings, qmlkonsole, angelfish (via the ssh -R mirror tunnel).
+
 ## 2026-11-26 (night): GPU DVFS governor (303 -> 903 MHz under load)
 - exynos2200-g3d (patch 0036): 2 ms busy sampling through an amdgpu hook (fences queued on the
   gfx/compute rings; GRBM_STATUS GUI_ACTIVE/CP_BUSY/SPI_BUSY stay set on the Xclipse even when idle,

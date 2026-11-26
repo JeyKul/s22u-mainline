@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Plasma Mobile (Xclipse GPU)
+Comment=Plasma Mobile, KWin rendering on the Xclipse 920
+Exec=/usr/local/bin/plasma-mobile-xclipse
+TryExec=/usr/bin/startplasmamobile
+Type=Application
+DesktopNames=KDE

@@ -22,7 +22,7 @@ minimum target: GPU, display, HDMI.
 | RAM | ✅ | 11 GB usable; all stock carve-outs kept out |
 | Storage: UFS 3.1 | ✅ | HS-G4, 2 lanes; reads verified against the stock partitions |
 | Rootfs on userdata | ✅ | Arch Linux ARM on f2fs (the whole 464 GB); userspace up in about 5 s |
-| Desktop | ✅ | **XFCE on Wayland (labwc), rendered by the Xclipse 920 GPU**: GLES compositing, GL 4.6/GLES 3.2/Vulkan 1.4 for apps; scan-out through simpledrm. LightDM autologin, 2x scaling. X11 XFCE session still there |
+| Desktop | ✅ | **Plasma Mobile (default) and XFCE on Wayland, rendered by the Xclipse 920 GPU** (KWin/labwc): GLES compositing, GL 4.6/GLES 3.2/Vulkan 1.4 for apps; scan-out through simpledrm. LightDM autologin, 2x scaling. X11 XFCE session still there |
 | ACPM (APM co-processor IPC) | ✅ | Mainline gs101 driver + Exynos 2200 variant (SRAM init data 0xf800, exynos850 mailbox, SPMI PMIC format) |
 | PMIC: S2MPS25/S2MPS26/S2MPM07 regulators | 🟡 | New `s2mps25-acpm` driver (SID 0/1/2); only DT-listed rails are registered (touch, S Pen). Keys, RTC: not yet |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |

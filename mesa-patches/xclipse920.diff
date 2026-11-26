@@ -1,3 +1,17 @@
+diff --git a/meson.build b/meson.build
+index 59d30c8..2b1a475 100644
+--- a/meson.build
++++ b/meson.build
+@@ -256,7 +256,9 @@ if with_gallium_swrast
+ endif
+ 
+ with_gallium = gallium_drivers.length() != 0
++# radeonsi too: the Exynos 2200's Xclipse 920 renders for a KMS-only display device (simpledrm)
+ with_gallium_drm = system_has_kms_drm and [
++  with_gallium_radeonsi,
+   with_gallium_asahi,
+   with_gallium_etnaviv,
+   with_gallium_freedreno,
 diff --git a/src/amd/common/ac_gpu_info.c b/src/amd/common/ac_gpu_info.c
 index aae6e0b..b97e589 100644
 --- a/src/amd/common/ac_gpu_info.c
@@ -402,6 +416,34 @@ index ea78270..87c0686 100644
                               (flags & RADEON_FLAG_REPLAYABLE ? AMDGPU_VA_RANGE_REPLAYABLE : 0);
     uint64_t va_gap_size = ws->debug_vm ? MAX2(4 * virt_alignment, 64 * 1024) : 0;
  
+diff --git a/src/gallium/auxiliary/pipe-loader/meson.build b/src/gallium/auxiliary/pipe-loader/meson.build
+index a4a13c0..3b4b11c 100644
+--- a/src/gallium/auxiliary/pipe-loader/meson.build
++++ b/src/gallium/auxiliary/pipe-loader/meson.build
+@@ -48,6 +48,9 @@ endif
+ if with_gallium_zink
+   renderonly_drivers_c_args += '-DGALLIUM_ZINK'
+ endif
++if with_gallium_radeonsi
++  renderonly_drivers_c_args += '-DGALLIUM_RADEONSI'
++endif
+ 
+ libpipe_loader_static = static_library(
+   'pipe_loader_static',
+diff --git a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+index dc631b4..3a872df 100644
+--- a/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
++++ b/src/gallium/auxiliary/pipe-loader/pipe_loader_drm.c
+@@ -398,6 +398,9 @@ pipe_loader_get_compatible_render_capable_device_fds(int kms_only_fd, unsigned i
+ #endif
+ #if defined GALLIUM_ZINK
+       "zink",
++#endif
++#if defined GALLIUM_RADEONSI
++      "amdgpu",	/* Exynos 2200: Xclipse 920 behind simpledrm */
+ #endif
+    };
+ 
 diff --git a/src/gallium/drivers/radeonsi/gfx/si_shader.c b/src/gallium/drivers/radeonsi/gfx/si_shader.c
 index 8969699..f24d353 100644
 --- a/src/gallium/drivers/radeonsi/gfx/si_shader.c
@@ -459,6 +501,88 @@ index 8d7c762..c7bc9d9 100644
  
     result->binary.type = SI_SHADER_BINARY_RAW;
     result->binary.code_buffer = buffer;
+diff --git a/src/gallium/drivers/radeonsi/si_buffer.c b/src/gallium/drivers/radeonsi/si_buffer.c
+index 9b9112d..eeac8c2 100644
+--- a/src/gallium/drivers/radeonsi/si_buffer.c
++++ b/src/gallium/drivers/radeonsi/si_buffer.c
+@@ -5,6 +5,7 @@
+  */
+ 
+ #include "si_pipe.h"
++#include "renderonly/renderonly.h"
+ #include "util/helpers.h"
+ #include "util/u_memory.h"
+ #include "util/u_transfer.h"
+@@ -231,6 +232,8 @@ static void si_resource_destroy(struct pipe_screen *screen, struct pipe_resource
+       struct si_resource *resource = &tex->buffer;
+ 
+       si_texture_reference(&tex->flushed_depth_texture, NULL);
++      if (tex->ro_scanout)
++         renderonly_scanout_destroy(tex->ro_scanout, ((struct si_screen *)screen)->ro);
+ 
+       if (tex->cmask_buffer != &tex->buffer) {
+          si_resource_reference(&tex->cmask_buffer, NULL);
+diff --git a/src/gallium/drivers/radeonsi/si_pipe.c b/src/gallium/drivers/radeonsi/si_pipe.c
+index 04207e1..95715b0 100644
+--- a/src/gallium/drivers/radeonsi/si_pipe.c
++++ b/src/gallium/drivers/radeonsi/si_pipe.c
+@@ -265,6 +265,17 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
+    return &sscreen->b;
+ }
+ 
++/* behind a KMS-only display device (kmsro): KMS handles come from dma-buf imports there */
++struct pipe_screen *radeonsi_screen_create_renderonly(int fd, struct renderonly *ro,
++                                                      const struct pipe_screen_config *config)
++{
++   struct pipe_screen *screen = radeonsi_screen_create(fd, config);
++
++   if (screen)
++      ((struct si_screen *)screen)->ro = ro;
++   return screen;
++}
++
+ struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_config *config)
+ {
+    struct radeon_winsys *rw = NULL;
+diff --git a/src/gallium/drivers/radeonsi/si_pipe.h b/src/gallium/drivers/radeonsi/si_pipe.h
+index 3e0a371..eed1d88 100644
+--- a/src/gallium/drivers/radeonsi/si_pipe.h
++++ b/src/gallium/drivers/radeonsi/si_pipe.h
+@@ -310,6 +310,7 @@ struct si_transfer {
+ 
+ struct si_texture {
+    struct si_resource buffer;
++   struct renderonly_scanout *ro_scanout; /* KMS handle on the kmsro display device */
+ 
+    struct radeon_surf surface;
+    struct si_texture *flushed_depth_texture;
+@@ -463,8 +464,12 @@ struct si_aux_context {
+    mtx_t lock;
+ };
+ 
++struct renderonly;
++struct renderonly_scanout;
++
+ struct si_screen {
+    struct pipe_screen b;
++   struct renderonly *ro; /* kmsro: scan-out through a KMS-only device */
+    struct radeon_winsys *ws;
+    struct disk_cache *disk_shader_cache;
+ 
+diff --git a/src/gallium/drivers/radeonsi/si_public.h b/src/gallium/drivers/radeonsi/si_public.h
+index ea8c4cc..3a74933 100644
+--- a/src/gallium/drivers/radeonsi/si_public.h
++++ b/src/gallium/drivers/radeonsi/si_public.h
+@@ -12,6 +12,9 @@ struct pipe_screen_config;
+ struct virgl_renderer_capset_drm;
+ 
+ struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_config *config);
++struct renderonly;
++struct pipe_screen *radeonsi_screen_create_renderonly(int fd, struct renderonly *ro,
++                                                      const struct pipe_screen_config *config);
+ 
+ bool si_virtgpu_probe_nctx(int fd, const struct virgl_renderer_capset_drm *caps);
+ 
 diff --git a/src/gallium/drivers/radeonsi/si_state_draw.cpp b/src/gallium/drivers/radeonsi/si_state_draw.cpp
 index 942623c..140acdf 100644
 --- a/src/gallium/drivers/radeonsi/si_state_draw.cpp
@@ -498,3 +622,98 @@ index 942623c..140acdf 100644
     if (GFX_VERSION == GFX10_3) {
        /* Workaround for incorrect stats with adjacent primitive types
         * (see PAL's waDisableInstancePacking).
+diff --git a/src/gallium/drivers/radeonsi/si_texture.c b/src/gallium/drivers/radeonsi/si_texture.c
+index e03baf3..1c48d17 100644
+--- a/src/gallium/drivers/radeonsi/si_texture.c
++++ b/src/gallium/drivers/radeonsi/si_texture.c
+@@ -8,6 +8,7 @@
+ #include "drm-uapi/drm_fourcc.h"
+ #include "gfx/si_gfx.h"
+ #include "si_pipe.h"
++#include "renderonly/renderonly.h"
+ #include "si_query.h"
+ #include "frontend/drm_driver.h"
+ #include "util/format/u_format.h"
+@@ -791,6 +792,13 @@ static bool si_texture_get_handle(struct pipe_screen *screen, struct pipe_contex
+    uint64_t modifier = DRM_FORMAT_MOD_INVALID;
+    bool flush = false;
+ 
++   /* kmsro: the KMS handle lives on the display device; import the dma-buf there once */
++   if (whandle->type == WINSYS_HANDLE_TYPE_KMS && sscreen->ro && resource->target != PIPE_BUFFER) {
++      if (!tex->ro_scanout)
++         tex->ro_scanout = renderonly_create_gpu_import_for_resource(resource, sscreen->ro, NULL);
++      return tex->ro_scanout && renderonly_get_handle(tex->ro_scanout, whandle);
++   }
++
+    ctx = threaded_context_unwrap_sync(ctx);
+    sctx = ctx ? (struct si_context *)ctx : si_get_aux_context(sscreen, &sscreen->aux_context.general);
+ 
+@@ -1405,6 +1413,10 @@ static enum radeon_surf_mode si_choose_tiling(struct si_screen *sscreen,
+    if (templ->flags & SI_RESOURCE_FLAG_FORCE_LINEAR)
+       return RADEON_SURF_MODE_LINEAR_ALIGNED;
+ 
++   /* kmsro: a KMS-only display device (simpledrm) scans out linear memory only */
++   if (sscreen->ro && (templ->bind & PIPE_BIND_SCANOUT))
++      return RADEON_SURF_MODE_LINEAR_ALIGNED;
++
+    /* Avoid Z/S decompress blits by forcing TC-compatible HTILE on GFX8,
+     * which requires 2D tiling.
+     */
+diff --git a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+index 2ead5db..bafe7db 100644
+--- a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
++++ b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
+@@ -39,6 +39,9 @@
+ #include "pipe/p_screen.h"
+ #include "pipe-loader/pipe_loader.h"
+ #include "renderonly/renderonly.h"
++#if defined(GALLIUM_RADEONSI)
++#include "radeonsi/si_public.h"
++#endif
+ #include "util/u_memory.h"
+ 
+ #include "loader.h"
+@@ -117,6 +120,12 @@ struct pipe_screen *kmsro_drm_screen_create(int kms_fd,
+ #if defined(GALLIUM_V3D)
+          ro->create_for_resource = renderonly_create_kms_dumb_buffer_for_resource;
+          screen = v3d_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
++#endif
++      } else if (strcmp(render_dev_name, "amdgpu") == 0) {
++#if defined(GALLIUM_RADEONSI)
++         /* radeonsi allocates (linear for scan-out), the KMS device imports the dma-buf */
++         ro->create_for_resource = renderonly_create_gpu_import_for_resource;
++         screen = radeonsi_screen_create_renderonly(ro->gpu_fd, ro, config);
+ #endif
+       } else if (strcmp(render_dev_name, "vc4") == 0) {
+ #if defined(GALLIUM_VC4)
+diff --git a/src/gallium/winsys/kmsro/drm/meson.build b/src/gallium/winsys/kmsro/drm/meson.build
+index cf3d40d..0594a45 100644
+--- a/src/gallium/winsys/kmsro/drm/meson.build
++++ b/src/gallium/winsys/kmsro/drm/meson.build
+@@ -6,7 +6,7 @@ libkmsrowinsys = static_library(
+   files('kmsro_drm_winsys.c'),
+   include_directories : [
+     inc_src, inc_include, inc_loader,
+-    inc_gallium, inc_gallium_aux, inc_gallium_winsys,
++    inc_gallium, inc_gallium_aux, inc_gallium_winsys, inc_gallium_drivers,
+   ],
+   link_with : libloader,
+   c_args : [renderonly_drivers_c_args],
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index 50426eb..d65abf2 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -259,8 +259,12 @@ loader_open_render_node_platform_devices(const char * const drivers[],
+    for (i = 0; i < num_devices; i++) {
+       device = devices[i];
+ 
++      /* the Exynos 2200's GPU sits behind an emulated PCI host: on an SoC it is
++       * still the display device's partner */
+       if ((device->available_nodes & (1 << DRM_NODE_RENDER)) &&
+-          (device->bustype == DRM_BUS_PLATFORM)) {
++          (device->bustype == DRM_BUS_PLATFORM ||
++           (device->bustype == DRM_BUS_PCI && device->deviceinfo.pci->vendor_id == 0x1002 &&
++            device->deviceinfo.pci->device_id == 0x163f && getenv("ACO_XCLIPSE")))) {
+          drmVersionPtr version;
+          bool found = false;
+ 
