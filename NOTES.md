@@ -1,5 +1,24 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (evening): GPU-RENDERED DESKTOP. XFCE on labwc (Wayland), composited by the Xclipse 920
+- Boot: xclipse-gpu.service (G3D firmware + amdgpu, /usr/local/sbin/xclipse-gpu-up) before the display
+  manager; LightDM autologin session xfce-xclipse (/usr/local/bin/xfce-xclipse-session): labwc renders
+  with GLES on renderD128 (WLR_RENDER_DRM_DEVICE) and scans out through simpledrm (card0). All clients
+  get /opt/mesa-xc through xclipse-env (ACO_XCLIPSE=1, AMD_DEBUG=nodcc, RADV_DEBUG=nodcc). Falls back to
+  pixman when the GPU is not up; the X11 session "xfce" is still installed.
+- What it took: simpledrm dumb buffers with a 256-byte aligned pitch (linux-patches/0035): radeonsi
+  only imports linear buffers with such a pitch (1440*4 = 5760 failed with EGL_BAD_ALLOC, 5888
+  imports; tools/dumbimport.c). 2x scale via ~/.config/xfce4/labwc/autostart (wlr-randr).
+- In the session: glmark2-es2-wayland build 1021 / texture 879 / phong 880 / refract 99 FPS (score 718,
+  GPU at its ~300 MHz minimum), vkcube (RADV, Wayland) runs, Xwayland GLX = radeonsi OpenGL 4.6 compat,
+  glxgears 307 FPS.
+- Packages from the PC without sudo: ssh -R 80:<de4 mirror IP>:80 + /etc/hosts entry on the phone
+  (mirrorlist = de4.mirror.archlinuxarm.org; the original is mirrorlist.orig).
+- Trap: tools/vkblob/android-root.sh rbinds /dev; without --make-rslave its /dev/dri bind mount hid
+  card0 in the real /dev, and umount -R took /dev/shm and /dev/pts with it. Fixed.
+- Open: DCC, GPU DVFS (clock stuck at minimum), cpu-copy scan-out (simpledrm) -> real DECON KMS,
+  Mesa Xclipse detection without the env var, Firefox/GTK GL check.
+
 ## 2026-11-26 (later): MESA DRAWS. RADV and radeonsi render correct triangles on the Xclipse 920
 - RADV (vktri-mesa, plain defaults incl. NGG culling, wave64): 1352 red px + blue clear, and with a
   colour varying the centre pixel is ff82413c, identical to Samsung's driver.

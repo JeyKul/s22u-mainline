@@ -1,7 +1,7 @@
 From 43ade9b913fb1e7758d72eaa064df59f5b1dbe37 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 18:47:33 +0100
-Subject: [PATCH 22/34] arm64: dts: exynos2200-b0s: reserve S-Boot's kernel
+Subject: [PATCH 22/35] arm64: dts: exynos2200-b0s: reserve S-Boot's kernel
  text window
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

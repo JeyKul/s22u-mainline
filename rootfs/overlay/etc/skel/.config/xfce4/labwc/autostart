@@ -1,0 +1,2 @@
+# the panel is 1440x3088 at about 500 dpi
+wlr-randr --output Unknown-1 --scale 2 &

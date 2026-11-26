@@ -1,7 +1,7 @@
 From cd330e3b6589825dd367bbc77d950c413c15c06a Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:19:06 +0100
-Subject: [PATCH 12/34] regulator: add Samsung S2MPS25/S2MPS26 over ACPM
+Subject: [PATCH 12/35] regulator: add Samsung S2MPS25/S2MPS26 over ACPM
 
 The Exynos 2200 PMICs are reached through the ACPM firmware (PMIC
 channel 2, SID 0 main / 1 sub), with all regulator registers in the PM1

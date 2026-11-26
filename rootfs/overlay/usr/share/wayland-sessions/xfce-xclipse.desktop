@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Xfce (Wayland, Xclipse GPU)
+Comment=Xfce on labwc, GPU rendering on the Xclipse 920
+Exec=/usr/local/bin/xfce-xclipse-session
+Type=Application
+DesktopNames=XFCE

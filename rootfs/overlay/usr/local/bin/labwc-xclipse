@@ -1,0 +1,8 @@
+#!/bin/sh
+# labwc on the panel: scan-out through simpledrm (card0), GLES rendering on the Xclipse 920.
+export WLR_DRM_DEVICES=/dev/dri/card0
+export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+export WLR_RENDERER=gles2
+export WLR_NO_HARDWARE_CURSORS=1
+export XDG_SESSION_TYPE=wayland
+exec /usr/local/bin/xclipse-env labwc "$@"

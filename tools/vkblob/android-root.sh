@@ -17,9 +17,9 @@ mountpoint -q odm || mount --bind /android/odm odm
 for a in com.android.runtime com.android.i18n; do
 	mountpoint -q apex/$a || mount -o loop,ro /android/apexsrc/$a/apex_payload.img apex/$a
 done
-mountpoint -q dev || mount --rbind /dev dev
+mountpoint -q dev || { mount --rbind /dev dev; mount --make-rslave dev; }
 mountpoint -q proc || mount -t proc proc proc
-mountpoint -q sys || mount --rbind /sys sys
+mountpoint -q sys || { mount --rbind /sys sys; mount --make-rslave sys; }
 mountpoint -q tmp || mount -t tmpfs tmpfs tmp
 # only the amdgpu nodes: with simpledrm's card0 visible the blob fails vkCreateInstance
 mkdir -p /run/adri
@@ -27,4 +27,5 @@ for n in /dev/dri/card* /dev/dri/renderD*; do
 	[ "$(basename "$(readlink -f /sys/class/drm/$(basename $n)/device/driver)")" = amdgpu ] &&
 		[ ! -e /run/adri/$(basename $n) ] && cp -a $n /run/adri/
 done
+# dev is a slave of /dev: without that this mount would also hide card0 in the real /dev/dri
 mountpoint -q dev/dri || mount --bind /run/adri dev/dri

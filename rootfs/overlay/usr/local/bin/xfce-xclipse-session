@@ -1,0 +1,13 @@
+#!/bin/sh
+# XFCE on labwc (Wayland), rendered by the Xclipse 920: labwc draws with GLES on the
+# GPU render node and scans out through simpledrm; clients get the Xclipse Mesa too.
+export WLR_DRM_DEVICES=/dev/dri/card0
+export WLR_NO_HARDWARE_CURSORS=1
+if [ -e /dev/dri/renderD128 ]; then
+	export WLR_RENDER_DRM_DEVICE=/dev/dri/renderD128
+	export WLR_RENDERER=gles2
+	exec /usr/local/bin/xclipse-env startxfce4 --wayland
+fi
+# GPU not up (xclipse-gpu.service failed): software rendering
+export WLR_RENDERER=pixman
+exec startxfce4 --wayland

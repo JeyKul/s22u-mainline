@@ -1,0 +1,15 @@
+[Unit]
+Description=Xclipse 920 GPU bring-up (G3D firmware + amdgpu)
+After=sys-kernel-debug.mount systemd-modules-load.service
+Before=display-manager.service
+ConditionPathExists=/sys/kernel/debug/exynos2200-g3d
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/xclipse-gpu-up
+# a wedged GPU must never stall shutdown
+ExecStop=/bin/true
+
+[Install]
+WantedBy=multi-user.target

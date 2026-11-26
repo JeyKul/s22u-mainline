@@ -1,0 +1,55 @@
+From bcc9952f1918c2f95170c1d38b4cae45de02acd3 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 17:05:40 +0100
+Subject: [PATCH 35/35] drm/sysfb: simpledrm: 256-byte aligned dumb buffer
+ pitch
+
+A GPU can then import simpledrm's dumb buffers as linear render targets
+(radeonsi needs 256-byte aligned linear pitches): a Wayland compositor
+renders with the Exynos 2200's Xclipse 920 and scans out through simpledrm.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/sysfb/simpledrm.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/drivers/gpu/drm/sysfb/simpledrm.c b/drivers/gpu/drm/sysfb/simpledrm.c
+index 21ddf4502..c404855ab 100644
+--- a/drivers/gpu/drm/sysfb/simpledrm.c
++++ b/drivers/gpu/drm/sysfb/simpledrm.c
+@@ -20,6 +20,7 @@
+ #include <drm/drm_damage_helper.h>
+ #include <drm/drm_device.h>
+ #include <drm/drm_drv.h>
++#include <drm/drm_dumb_buffers.h>
+ #include <drm/drm_fbdev_shmem.h>
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_gem_atomic_helper.h>
+@@ -887,8 +888,24 @@ static struct simpledrm_device *simpledrm_device_create(struct drm_driver *drv,
+ 
+ DEFINE_DRM_GEM_FOPS(simpledrm_fops);
+ 
++/*
++ * Dumb buffers with a 256-byte aligned pitch: a GPU renderer (radeonsi on the
++ * Exynos 2200's Xclipse 920) can then import them as linear render targets,
++ * so a compositor draws with the GPU while simpledrm scans out.
++ */
++static int simpledrm_dumb_create(struct drm_file *file, struct drm_device *dev,
++				 struct drm_mode_create_dumb *args)
++{
++	int ret = drm_mode_size_dumb(dev, args, SZ_256, 0);
++
++	if (ret)
++		return ret;
++	return drm_gem_shmem_create_with_handle(file, dev, args->size, &args->handle);
++}
++
+ static struct drm_driver simpledrm_driver = {
+ 	DRM_GEM_SHMEM_DRIVER_OPS,
++	.dumb_create = simpledrm_dumb_create,
+ 	DRM_FBDEV_SHMEM_DRIVER_OPS,
+ 	.name			= DRIVER_NAME,
+ 	.desc			= DRIVER_DESC,
+-- 
+2.56.1
+

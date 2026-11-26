@@ -1,0 +1,12 @@
+#!/bin/sh
+# Bring up the Xclipse 920 at boot: G3D power (S2MPU, domain, firmware boot through
+# exynos2200-g3d debugfs), then amdgpu. Only once per boot: a second firmware boot
+# under a live amdgpu wrecks the GPU.
+G=/sys/kernel/debug/exynos2200-g3d
+lsmod | grep -q '^amdgpu ' && exit 0
+[ -e $G ] || { echo "no $G"; exit 1; }
+echo s2mpufd > $G || exit 1
+echo on > $G
+echo fw > $G
+modprobe amdgpu gpu_recovery=0
+grep -q passed /sys/kernel/debug/dri/1/amdgpu_test_ib 2>/dev/null; exit 0

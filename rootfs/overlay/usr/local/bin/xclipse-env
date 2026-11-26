@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run a program with the Xclipse 920 Mesa build (/opt/mesa-xc, mesa-patches/xclipse920.diff).
+# Usage: xclipse-env cmd args...
+export LD_LIBRARY_PATH=/opt/mesa-xc/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export __EGL_VENDOR_LIBRARY_FILENAMES=/opt/mesa-xc/share/glvnd/egl_vendor.d/50_mesa.json
+export GBM_BACKENDS_PATH=/opt/mesa-xc/lib/gbm
+export LIBGL_DRIVERS_PATH=/opt/mesa-xc/lib/dri
+export VK_ICD_FILENAMES=/opt/mesa-xc/share/vulkan/icd.d/radeon_icd.aarch64.json
+export ACO_XCLIPSE=1
+export AMD_DEBUG=nodcc	# DCC surfaces still hang the GPU
+export RADV_DEBUG=nodcc
+exec "$@"
