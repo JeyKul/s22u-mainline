@@ -8,3 +8,6 @@
 *.jpg
 *.png
 /logs/
+tools/isa/*.bin
+logs/*.ibd
+logs/sh-*/
