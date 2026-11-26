@@ -1,7 +1,7 @@
 From dad5b5b9c0ac12b7a3bdf498c9218613e0a760e5 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:40:55 +0100
-Subject: [PATCH 14/38] drm: exynos2200: DSIM takeover and panel backlight
+Subject: [PATCH 14/41] drm: exynos2200: DSIM takeover and panel backlight
 
 Exynos 2200 DSIM driver that takes over the DSI link the bootloader
 left running (DECON0, command mode, DSC). With the bootloader's DSIM

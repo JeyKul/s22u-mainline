@@ -1,0 +1,157 @@
+From d747bfbf91b094d426dbbb8f65918397204b78d8 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:12:35 +0100
+Subject: [PATCH 39/41] clk: samsung: acpm: Exynos 2200 DVFS domains
+
+Register the ACPM clocks device for the Exynos 2200 and list its DVFS domains
+in the order of the firmware's frequency/voltage map (MIF, INT, CPUCL0-2,
+NPU, DSU, DISP, AUD). Its GET answers 0, so the last set rate (or the boot
+rate from the map) is reported instead. cpufreq-dt drives the CPU clusters
+through these clocks; ACPM sets the voltages.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/clk/samsung/clk-acpm.c         | 54 ++++++++++++++++++++++----
+ drivers/firmware/samsung/exynos-acpm.c |  1 +
+ 2 files changed, 47 insertions(+), 8 deletions(-)
+
+diff --git a/drivers/clk/samsung/clk-acpm.c b/drivers/clk/samsung/clk-acpm.c
+index 7680bc8c5..a400fab08 100644
+--- a/drivers/clk/samsung/clk-acpm.c
++++ b/drivers/clk/samsung/clk-acpm.c
+@@ -18,6 +18,7 @@
+ 
+ struct acpm_clk {
+ 	u32 id;
++	unsigned long rate;	/* last rate set: some firmware answers GET with 0 */
+ 	struct clk_hw hw;
+ 	unsigned int mbox_chan_id;
+ 	struct acpm_handle *handle;
+@@ -25,6 +26,7 @@ struct acpm_clk {
+ 
+ struct acpm_clk_variant {
+ 	const char *name;
++	unsigned long boot_rate;	/* reported until the first set when GET returns 0 */
+ };
+ 
+ struct acpm_clk_driver_data {
+@@ -63,22 +65,54 @@ static const struct acpm_clk_driver_data acpm_clk_gs101 = {
+ 	.mbox_chan_id = 0,
+ };
+ 
++#define ACPM_CLK_BOOT(cname, khz)			\
++	{						\
++		.name		= cname,		\
++		.boot_rate	= (khz) * 1000UL,	\
++	}
++
++/*
++ * Exynos 2200: ACPM DVFS domains in the order of the firmware's frequency/voltage map, with
++ * the boot rates from it (its GET answers 0).
++ */
++static const struct acpm_clk_variant exynos2200_acpm_clks[] = {
++	ACPM_CLK_BOOT("mif", 3172000),
++	ACPM_CLK_BOOT("int", 400000),
++	ACPM_CLK_BOOT("cpucl0", 960000),
++	ACPM_CLK_BOOT("cpucl1", 960000),
++	ACPM_CLK_BOOT("cpucl2", 960000),
++	ACPM_CLK_BOOT("npu", 160000),
++	ACPM_CLK_BOOT("dsu", 672000),
++	ACPM_CLK_BOOT("disp", 663000),
++	ACPM_CLK_BOOT("aud", 80000),
++};
++
++static const struct acpm_clk_driver_data acpm_clk_exynos2200 = {
++	.clks = exynos2200_acpm_clks,
++	.nr_clks = ARRAY_SIZE(exynos2200_acpm_clks),
++	.mbox_chan_id = 0,
++};
++
+ static unsigned long acpm_clk_recalc_rate(struct clk_hw *hw,
+ 					  unsigned long parent_rate)
+ {
+ 	struct acpm_clk *clk = to_acpm_clk(hw);
++	unsigned long rate = clk->handle->ops->dvfs.get_rate(clk->handle, clk->mbox_chan_id,
++							     clk->id);
+ 
+-	return clk->handle->ops->dvfs.get_rate(clk->handle, clk->mbox_chan_id,
+-					       clk->id);
++	return rate ?: clk->rate;
+ }
+ 
+ static int acpm_clk_set_rate(struct clk_hw *hw, unsigned long rate,
+ 			     unsigned long parent_rate)
+ {
+ 	struct acpm_clk *clk = to_acpm_clk(hw);
++	int ret = clk->handle->ops->dvfs.set_rate(clk->handle, clk->mbox_chan_id,
++						  clk->id, rate);
+ 
+-	return clk->handle->ops->dvfs.set_rate(clk->handle, clk->mbox_chan_id,
+-					       clk->id, rate);
++	if (!ret)
++		clk->rate = rate;
++	return ret;
+ }
+ 
+ static const struct clk_ops acpm_clk_ops = {
+@@ -107,6 +141,7 @@ static int acpm_clk_probe(struct platform_device *pdev)
+ 	struct device *dev = &pdev->dev;
+ 	struct acpm_clk *aclks;
+ 	unsigned int mbox_chan_id;
++	const struct acpm_clk_driver_data *data;
+ 	int i, err, count;
+ 
+ 	acpm_handle = devm_acpm_get_by_node(dev, dev->parent->of_node);
+@@ -114,8 +149,9 @@ static int acpm_clk_probe(struct platform_device *pdev)
+ 		return dev_err_probe(dev, PTR_ERR(acpm_handle),
+ 				     "Failed to get acpm handle\n");
+ 
+-	count = acpm_clk_gs101.nr_clks;
+-	mbox_chan_id = acpm_clk_gs101.mbox_chan_id;
++	data = (const struct acpm_clk_driver_data *)platform_get_device_id(pdev)->driver_data;
++	count = data->nr_clks;
++	mbox_chan_id = data->mbox_chan_id;
+ 
+ 	clk_data = devm_kzalloc(dev, struct_size(clk_data, hws, count),
+ 				GFP_KERNEL);
+@@ -137,13 +173,14 @@ static int acpm_clk_probe(struct platform_device *pdev)
+ 		 * are sequential and do not have gaps.
+ 		 */
+ 		aclk->id = i;
++		aclk->rate = data->clks[i].boot_rate;
+ 		aclk->handle = acpm_handle;
+ 		aclk->mbox_chan_id = mbox_chan_id;
+ 
+ 		hws[i] = &aclk->hw;
+ 
+ 		err = acpm_clk_register(dev, aclk,
+-					acpm_clk_gs101.clks[i].name);
++					data->clks[i].name);
+ 		if (err)
+ 			return dev_err_probe(dev, err,
+ 					     "Failed to register clock\n");
+@@ -154,7 +191,8 @@ static int acpm_clk_probe(struct platform_device *pdev)
+ }
+ 
+ static const struct platform_device_id acpm_clk_id[] = {
+-	{ .name = "gs101-acpm-clk" },
++	{ .name = "gs101-acpm-clk", .driver_data = (kernel_ulong_t)&acpm_clk_gs101 },
++	{ .name = "exynos2200-acpm-clk", .driver_data = (kernel_ulong_t)&acpm_clk_exynos2200 },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(platform, acpm_clk_id);
+diff --git a/drivers/firmware/samsung/exynos-acpm.c b/drivers/firmware/samsung/exynos-acpm.c
+index dd5b3a5dc..bc4637ba2 100644
+--- a/drivers/firmware/samsung/exynos-acpm.c
++++ b/drivers/firmware/samsung/exynos-acpm.c
+@@ -912,6 +912,7 @@ static const struct acpm_match_data acpm_gs101 = {
+ 
+ static const struct acpm_match_data acpm_exynos2200 = {
+ 	.initdata_base = ACPM_EXYNOS2200_INITDATA_BASE,
++	.acpm_clk_dev_name = "exynos2200-acpm-clk",
+ 	.pmic_sid_in_cmd1 = true,
+ };
+ 
+-- 
+2.56.1
+

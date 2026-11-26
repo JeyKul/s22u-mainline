@@ -1,0 +1,229 @@
+From ea4c2e10cf5cbda51d334fa2f4189f3677188048 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:12:35 +0100
+Subject: [PATCH 40/41] arm64: dts: exynos2200-b0s: CPU DVFS (OPP tables from
+ ACPM's map), PSCI over HVC
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 193 ++++++++++++++++++
+ 1 file changed, 193 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index e75ffe128..db4e6a6c6 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -250,6 +250,7 @@ / {
+ 	firmware {
+ 		acpm_ipc: power-management {
+ 			compatible = "samsung,exynos2200-acpm-ipc";
++			#clock-cells = <1>;	/* ACPM DVFS domains: 0 MIF, 1 INT, 2-4 CPU clusters */
+ 			mboxes = <&ap2apm_mailbox>;
+ 			shmem = <&apm_sram>;
+ 
+@@ -295,6 +296,189 @@ ldo17s: ldo17s {
+ 	};
+ };
+ 
++/ {
++/*
++ * CPU DVFS through ACPM (clk-acpm): the levels are the firmware's own (its frequency/voltage map
++ * in APM SRAM, tools/fvmap.py), between Samsung's DT limits. ACPM sets the voltages. The top
++ * levels stay out until the CPUs have thermal limits.
++ */
++	cpu_little_opp: opp-table-little {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-400000000 {
++			opp-hz = /bits/ 64 <400000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-576000000 {
++			opp-hz = /bits/ 64 <576000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-768000000 {
++			opp-hz = /bits/ 64 <768000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-960000000 {
++			opp-hz = /bits/ 64 <960000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1152000000 {
++			opp-hz = /bits/ 64 <1152000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1344000000 {
++			opp-hz = /bits/ 64 <1344000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1536000000 {
++			opp-hz = /bits/ 64 <1536000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1728000000 {
++			opp-hz = /bits/ 64 <1728000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1824000000 {
++			opp-hz = /bits/ 64 <1824000000>;
++			clock-latency-ns = <500000>;
++		};
++	};
++	cpu_mid_opp: opp-table-mid {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-576000000 {
++			opp-hz = /bits/ 64 <576000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-768000000 {
++			opp-hz = /bits/ 64 <768000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-960000000 {
++			opp-hz = /bits/ 64 <960000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1152000000 {
++			opp-hz = /bits/ 64 <1152000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1344000000 {
++			opp-hz = /bits/ 64 <1344000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1536000000 {
++			opp-hz = /bits/ 64 <1536000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1728000000 {
++			opp-hz = /bits/ 64 <1728000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1920000000 {
++			opp-hz = /bits/ 64 <1920000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-2112000000 {
++			opp-hz = /bits/ 64 <2112000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-2304000000 {
++			opp-hz = /bits/ 64 <2304000000>;
++			clock-latency-ns = <500000>;
++		};
++	};
++	cpu_big_opp: opp-table-big {
++		compatible = "operating-points-v2";
++		opp-shared;
++
++		opp-576000000 {
++			opp-hz = /bits/ 64 <576000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-768000000 {
++			opp-hz = /bits/ 64 <768000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-960000000 {
++			opp-hz = /bits/ 64 <960000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1152000000 {
++			opp-hz = /bits/ 64 <1152000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1344000000 {
++			opp-hz = /bits/ 64 <1344000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1536000000 {
++			opp-hz = /bits/ 64 <1536000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1728000000 {
++			opp-hz = /bits/ 64 <1728000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-1920000000 {
++			opp-hz = /bits/ 64 <1920000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-2112000000 {
++			opp-hz = /bits/ 64 <2112000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-2304000000 {
++			opp-hz = /bits/ 64 <2304000000>;
++			clock-latency-ns = <500000>;
++		};
++		opp-2400000000 {
++			opp-hz = /bits/ 64 <2400000000>;
++			clock-latency-ns = <500000>;
++		};
++	};
++};
++
++&cpu0 {
++	clocks = <&acpm_ipc 2>;
++	operating-points-v2 = <&cpu_little_opp>;
++};
++
++&cpu1 {
++	clocks = <&acpm_ipc 2>;
++	operating-points-v2 = <&cpu_little_opp>;
++};
++
++&cpu2 {
++	clocks = <&acpm_ipc 2>;
++	operating-points-v2 = <&cpu_little_opp>;
++};
++
++&cpu3 {
++	clocks = <&acpm_ipc 2>;
++	operating-points-v2 = <&cpu_little_opp>;
++};
++
++&cpu4 {
++	clocks = <&acpm_ipc 3>;
++	operating-points-v2 = <&cpu_mid_opp>;
++};
++
++&cpu5 {
++	clocks = <&acpm_ipc 3>;
++	operating-points-v2 = <&cpu_mid_opp>;
++};
++
++&cpu6 {
++	clocks = <&acpm_ipc 3>;
++	operating-points-v2 = <&cpu_mid_opp>;
++};
++
++&cpu7 {
++	clocks = <&acpm_ipc 4>;
++	operating-points-v2 = <&cpu_big_opp>;
++};
++
+ &{/soc@0} {
+ 	apm_sram: sram@2060000 {
+ 		compatible = "mmio-sram";
+@@ -544,3 +728,12 @@ &usb_hsphy {
+ &xtcxo {
+ 	clock-frequency = <76800000>;
+ };
++
++/*
++ * PSCI through Samsung's EL2 hypervisor, as the stock kernel does. Either way CPU_SUSPEND to
++ * the power-down state returns success at once (demoted to standby by the firmware), which
++ * cpuidle counts as rejected: Samsung's own idle driver prepares something first. Open.
++ */
++&{/psci} {
++	method = "hvc";
++};
+-- 
+2.56.1
+

@@ -1,0 +1,98 @@
+From 1fa95f19d471dc7332b920898e77a6693ebd9e70 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:12:35 +0100
+Subject: [PATCH 41/41] soc: samsung: exynos2200-g3d: MIF floor and GPU-driven
+ MIF levels; TMU zone readout
+
+S-Boot leaves the memory clock at 3172 MHz (743 mV). The GPU governor now keeps
+it at mif_floor_khz (1014 MHz) and raises it with the G3D level by Samsung's
+mif_min_lock table. tmu_temps shows all TMU zones.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/soc/samsung/exynos2200-g3d.c | 48 ++++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/drivers/soc/samsung/exynos2200-g3d.c b/drivers/soc/samsung/exynos2200-g3d.c
+index 9c256cdf3..277d53201 100644
+--- a/drivers/soc/samsung/exynos2200-g3d.c
++++ b/drivers/soc/samsung/exynos2200-g3d.c
+@@ -134,6 +134,37 @@ static const unsigned int g3d_levels_khz[] = {
+ 	303000, 404000, 500000, 605000, 807000, 903000, 999000, 1095000, 1306000,
+ };
+ 
++/*
++ * Memory clock (MIF, ACPM DVFS id 0): S-Boot leaves it at its top level (3172 MHz, 743 mV)
++ * and nothing lowers it, which keeps the SoC warm. The governor keeps it at a floor and
++ * raises it with the GPU level by Samsung's sgpu mif_min_lock table.
++ */
++#define G3D_ACPM_MIF_ID		0
++static unsigned int mif_floor_khz = 1014000;
++module_param(mif_floor_khz, uint, 0644);
++MODULE_PARM_DESC(mif_floor_khz, "lowest memory clock the GPU governor sets (kHz)");
++static unsigned int mif_cur_khz;
++module_param(mif_cur_khz, uint, 0444);
++
++static const struct { unsigned int g3d, mif; } g3d_mif_lock[] = {
++	{ 404000, 1352000 }, { 500000, 1716000 }, { 807000, 2288000 }, { 903000, 2535000 },
++	{ 999000, 2730000 }, { 1095000, 3172000 },
++};
++
++static void g3d_set_mif(struct exynos2200_g3d *g, unsigned int g3d_khz)
++{
++	unsigned int mif = mif_floor_khz;
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(g3d_mif_lock); i++)
++		if (g3d_khz >= g3d_mif_lock[i].g3d)
++			mif = max(mif, g3d_mif_lock[i].mif);
++	if (mif == mif_cur_khz)
++		return;
++	if (!g->acpm->ops->dvfs.set_rate(g->acpm, G3D_ACPM_DVFS_CHAN, G3D_ACPM_MIF_ID, mif * 1000UL))
++		mif_cur_khz = mif;
++}
++
+ static bool (*g3d_busy_cb)(void *data);
+ static int (*g3d_quiesce_cb)(void *data, bool stop);
+ static void *g3d_busy_data;
+@@ -173,6 +204,11 @@ MODULE_PARM_DESC(gov_max_khz, "highest G3D clock the governor requests (kHz)");
+ static int gov_temp_c = -1;
+ module_param(gov_temp_c, int, 0444);
+ MODULE_PARM_DESC(gov_temp_c, "last G3D temperature (deg C), -1: no reading");
++/* all of Samsung's TMU zones (BIG, MID, LITTLE, G3D, ISP, ...), refreshed with the G3D reading */
++static char tmu_temps[64];
++module_param_string(tmu_temps, tmu_temps, sizeof(tmu_temps), 0444);
++MODULE_PARM_DESC(tmu_temps, "temperatures of TMU zones 0-7 (deg C, -: no reading)");
++
+ static int gov_hot_c = 85;
+ module_param(gov_hot_c, int, 0644);
+ MODULE_PARM_DESC(gov_hot_c, "G3D temperature from which the governor throttles (deg C)");
+@@ -474,6 +510,17 @@ static void g3d_gov_work(struct work_struct *w)
+ 		    t <= 0 || t > 150)
+ 			t = -1;
+ 		gov_temp_c = t;
++		{
++			char *p = tmu_temps;
++			int z, zt;
++
++			for (z = 0; z < 8; z++) {
++				if (g->acpm->ops->tmu.read_temp(g->acpm, G3D_ACPM_TMU_CHAN, z, &zt))
++					p += scnprintf(p, tmu_temps + sizeof(tmu_temps) - p, "- ");
++				else
++					p += scnprintf(p, tmu_temps + sizeof(tmu_temps) - p, "%d ", zt);
++			}
++		}
+ 		if (t >= gov_hot_c && g->gov_cap)
+ 			g->gov_cap--;		/* hot: one level lower */
+ 		else if (t >= 0 && t < gov_hot_c - gov_hyst_c && g->gov_cap < ARRAY_SIZE(g3d_levels_khz) - 1)
+@@ -510,6 +557,7 @@ static void g3d_gov_work(struct work_struct *w)
+ 	}
+ 	g->gov_level = lvl;
+ 	gov_cur_khz = g3d_levels_khz[lvl];
++	g3d_set_mif(g, gov_cur_khz);
+ }
+ 
+ static enum hrtimer_restart g3d_gov_tick(struct hrtimer *t)
+-- 
+2.56.1
+

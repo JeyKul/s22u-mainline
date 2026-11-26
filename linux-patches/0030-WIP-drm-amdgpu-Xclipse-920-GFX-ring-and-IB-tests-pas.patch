@@ -1,7 +1,7 @@
 From 7c823ec5ba3d07318fbb36caafb8097eb5fbb3b1 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 23:19:08 +0100
-Subject: [PATCH 30/38] WIP: drm/amdgpu: Xclipse 920 GFX: ring and IB tests
+Subject: [PATCH 30/41] WIP: drm/amdgpu: Xclipse 920 GFX: ring and IB tests
  pass
 
 gfx_v10_0 for the Xclipse 920: firmware preloaded by EL3 (only wait for

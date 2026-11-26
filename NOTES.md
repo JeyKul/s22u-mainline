@@ -1,5 +1,21 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (night 3): heat. CPU DVFS, MIF floor; idle 56-58 C -> 49 C
+- ACPM's frequency/voltage map (fvmap in APM SRAM 0x20a4400, tools/fvmap.py; read via the g3d
+  debugfs because STRICT_DEVMEM): exact levels and voltages per domain. S-Boot leaves MIF at
+  3172 MHz @ 743 mV, CPUs at 960 MHz, G3D levels incl. 80/202/711/1210/1402.
+- All TMU zones via ACPM (ch 7, tz 0-6 = BIG MID LITTLE G3D ISP NPU CP): exynos2200_g3d.tmu_temps.
+  Idle after boot was 55-58 C everywhere (whole die).
+- MIF: G3D governor keeps it at mif_floor_khz=1014000 (500 mV), raised by GPU level with sgpu's
+  mif_min_lock. 3172 -> 1014: about -4 C; 421 gave -2 C more (not kept: CPU bandwidth).
+- CPU: clk-acpm with an Exynos 2200 domain list + cpufreq-dt (OPP tables from the fvmap, ACPM sets
+  voltages), schedutil. Top levels left out until CPU thermal limits exist (LIT 1824, MID 2304,
+  BIG 2400). big core busy loop: 2266 ms @576 MHz, 548 ms @2400 MHz. Mostly at minimum when idle.
+- CPU deep idle: cpu-sleep-0 never entered. PSCI CPU_SUSPEND (power-down, 0x10000) returns SUCCESS at
+  once (firmware demotes to standby) -> cpuidle "rejected" millions of times. Same over HVC (now used,
+  as stock). Samsung's exynos-cpupm probably sets PMU state first. Open; next heat item.
+- Other heat: USB charging from the PC, panel at 760/2039, G3D domain never power-gated.
+
 ## 2026-11-26 (night 2): Mesa finds the Xclipse itself; GPU thermal limit; Mesa builds on the PC
 - Detection: the emulated PCI function has subsystem 144d:0920 (patch 0038); Mesa's util_xclipse920()
   (src/util/u_xclipse.h) checks it in sysfs and replaces every ACO_XCLIPSE switch (ACO_XCLIPSE=0/1
