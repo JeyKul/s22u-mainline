@@ -1,5 +1,14 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (night 5): Wi-Fi step 1, PCIe controller reachable
+- HSI1 power domain was off (PMU 0x15862580 = 0). On by hand: HSI1_CONFIGURATION bit0, STATUS bit0,
+  TZPC restore SMC 0x82000410 (1, 0x11210204, 2) -> a0 0, CMU_HSI1 user muxes 0x0610/0x0620 = 0x10.
+  Then ELBI (0x113b0000) and DBI (0x11800000: a5a5144d) answer. Order matters: domain off = SoC freeze.
+- Next: PHY init (pcie-exynosS5E9925-rc-cal.c ch0 table), PERST gpf0-1, LTSSM (ELBI), link 0x11;
+  WLAN_EN = S2MPS26 GPIO 18 (ACPM, GPIO block type 0x0B, reg 0x12+pin, OEN bit 6; some pins also
+  need a VGPIO write in SYSREG_ALIVE 0x1582082c); host wake on bank phandle 0x198 pin 2.
+- BCM4389: not in brcmfmac; firmware in vendor (bcm4389C1_*.hcd is BT; Wi-Fi blobs to locate).
+
 ## 2026-11-26 (night 4): native display driver, stage 1 (DECON0/DPP0 KMS); Plasma smooth
 - How it works: buffers -> DPP (16 planes) -> DECON0 (blend, DSC) -> DSIM0 -> S6E3HAE (rainbow_b0) in
   command mode: the panel has its own GRAM and a TE at 120 Hz (DECON HW_TE_CNT +121/s); DECON sends a
@@ -24,6 +33,9 @@
   Plasma before this change; later "all looks fine". KWin commits once per vblank (~8 ms).
 - Blur: Plasma Mobile's envmanager sets KWin blurEnabled[$i]=false; /etc/xdg/autostart
   xclipse-kwin-effects loads it after login. Mobile shell's own blur is QML (wallpaper areas only).
+- Brightness slider vanished with the DSI connector (KWin owns brightness for built-in panels and
+  pairs a raw backlight only with its own device); backlight type platform -> "Brightness control:
+  supported" again.
 - Open: Xwayland "EGL setup failed, disabling glamor"; panel off/on and 60 Hz need stage 2 (own
   DSIM/panel init); SysMMU (stage 3) for more planes/zero-copy of any buffer; module not yet in the
   rootfs overlay/installer.

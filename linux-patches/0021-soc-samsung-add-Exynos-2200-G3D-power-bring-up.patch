@@ -1,7 +1,7 @@
 From d4135d205aec31b9f480e559d8dba7d6e7bb1f35 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 17:48:20 +0100
-Subject: [PATCH 21/44] soc: samsung: add Exynos 2200 G3D power bring-up
+Subject: [PATCH 21/45] soc: samsung: add Exynos 2200 G3D power bring-up
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---

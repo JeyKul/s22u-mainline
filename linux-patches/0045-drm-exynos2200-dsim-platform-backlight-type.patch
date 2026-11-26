@@ -1,0 +1,30 @@
+From badfa300be4330b8cba392294c873733d648da73 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:53:13 +0100
+Subject: [PATCH 45/45] drm/exynos2200: dsim: platform backlight type
+
+KWin pairs a raw backlight with a panel only when both hang off the same
+device; the backlight lives on DSIM, the KMS device is DECON. As a platform
+backlight KWin takes it for the built-in DSI panel again.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/exynos2200/exynos2200_dsim.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_dsim.c b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
+index 59e77da8e..970756a52 100644
+--- a/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
++++ b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
+@@ -205,7 +205,7 @@ static void exynos2200_dsim_reinit(struct exynos2200_dsim *dsim)
+ static int exynos2200_dsim_probe(struct platform_device *pdev)
+ {
+ 	struct backlight_properties props = {
+-		.type = BACKLIGHT_RAW,
++		.type = BACKLIGHT_PLATFORM,
+ 		.max_brightness = S6E3HAE_BRT_MAX - S6E3HAE_BRT_MIN,
+ 		.brightness = 0x300 - S6E3HAE_BRT_MIN,
+ 		.scale = BACKLIGHT_SCALE_NON_LINEAR,
+-- 
+2.56.1
+
