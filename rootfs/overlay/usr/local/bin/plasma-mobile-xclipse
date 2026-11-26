@@ -1,7 +1,11 @@
 #!/bin/sh
-# Plasma Mobile rendered by the Xclipse 920: KWin drives simpledrm (card0) through GBM,
-# which Mesa (kmsro + radeonsi, mesa-patches/xclipse920.diff) backs with GPU buffers.
-export KWIN_DRM_DEVICES=$(readlink -f /dev/dri/by-path/platform-chosen:framebuffer-card)
+# Plasma Mobile rendered by the Xclipse 920. KWin drives the panel through the Exynos 2200
+# DECON KMS driver (page flips, no copy), or through simpledrm when that driver is absent;
+# Mesa's kmsro backs GBM on either with GPU (radeonsi) buffers (mesa-patches/xclipse920.diff).
+for c in /dev/dri/by-path/platform-19f00000.display-controller-card \
+	 /dev/dri/by-path/platform-chosen:framebuffer-card; do
+	[ -e "$c" ] && { export KWIN_DRM_DEVICES=$(readlink -f "$c"); break; }
+done
 if [ -e /dev/dri/renderD128 ]; then
 	exec /usr/local/bin/xclipse-env /usr/lib/plasma-dbus-run-session-if-needed startplasmamobile
 fi

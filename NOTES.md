@@ -1,5 +1,27 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-26 (night 4): native display driver, stage 1 (DECON0/DPP0 KMS); Plasma smooth
+- How it works: buffers -> DPP (16 planes) -> DECON0 (blend, DSC) -> DSIM0 -> S6E3HAE (rainbow_b0) in
+  command mode: the panel has its own GRAM and a TE at 120 Hz (DECON HW_TE_CNT +121/s); DECON sends a
+  frame per TE. S-Boot leaves only DPP0 on, base 0xf6200000, stride 0x5a0 px.
+- DPP0 registers are shadowed: RDMA_BASEADDR_P0 (0x40) latches into 0x440 only with
+  RDMA_ENABLE.IDMA_SFR_UPDATE_FORCE (bit 4); DECON SHD_REG_UP_REQ alone does nothing for it.
+- drivers/gpu/drm/exynos2200/exynos2200_decon.c (patch 0042/0043, module exynos2200-decon): simple
+  display pipe, XRGB8888 linear 1440x3088, GEM DMA from CMA (CONFIG_CMA_SIZE_MBYTES=192; no SysMMU
+  driver yet, DPP0 reads physical addresses), dumb pitch 256-aligned, flip applied in the frame-done
+  IRQ (GIC SPI 370, 4-cell specifier on this GIC!) with the force-latch, vblank 120 Hz. Kicks
+  simpledrm out (aperture). fbcon works on it.
+- Mesa: kmsro uses dumb-buffer mode for KMS driver "exynos2200" (KMS allocates contiguous, radeonsi
+  imports; si_texture_create_with_modifier), GPU-import mode stays for simpledrm. tools/gbmtest.c
+  (GBMTEST_CARD=...) AddFB2 ok.
+- KWin: plasma-mobile-xclipse picks the DECON card (by-path platform-19f00000.display-controller-card),
+  simpledrm otherwise. 1 screen at 120 Hz, GLES on radeonsi, zero-copy flips.
+- "Laggy" was plasmashell at 183 % CPU: ~/.config/kdeglobals had [QtQuickRendererSettings]
+  SceneGraphBackend=software (saved back when GL did not work). Removed -> Qt Quick on the GPU, smooth.
+- Open: Xwayland "EGL setup failed, disabling glamor"; panel off/on and 60 Hz need stage 2 (own
+  DSIM/panel init); SysMMU (stage 3) for more planes/zero-copy of any buffer; module not yet in the
+  rootfs overlay/installer.
+
 ## 2026-11-26 (night 3): heat. CPU DVFS, MIF floor; idle 56-58 C -> 49 C
 - ACPM's frequency/voltage map (fvmap in APM SRAM 0x20a4400, tools/fvmap.py; read via the g3d
   debugfs because STRICT_DEVMEM): exact levels and voltages per domain. S-Boot leaves MIF at

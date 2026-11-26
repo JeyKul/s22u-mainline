@@ -719,18 +719,30 @@ index 942623c..140acdf 100644
        /* Workaround for incorrect stats with adjacent primitive types
         * (see PAL's waDisableInstancePacking).
 diff --git a/src/gallium/drivers/radeonsi/si_texture.c b/src/gallium/drivers/radeonsi/si_texture.c
-index e03baf3..1c48d17 100644
+index e03baf3..a13e398 100644
 --- a/src/gallium/drivers/radeonsi/si_texture.c
 +++ b/src/gallium/drivers/radeonsi/si_texture.c
-@@ -8,6 +8,7 @@
+@@ -8,6 +8,8 @@
  #include "drm-uapi/drm_fourcc.h"
  #include "gfx/si_gfx.h"
  #include "si_pipe.h"
++#include <unistd.h>
 +#include "renderonly/renderonly.h"
  #include "si_query.h"
  #include "frontend/drm_driver.h"
  #include "util/format/u_format.h"
-@@ -791,6 +792,13 @@ static bool si_texture_get_handle(struct pipe_screen *screen, struct pipe_contex
+@@ -20,6 +22,10 @@
+ 
+ #include "ac_formats.h"
+ 
++static struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
++                                                    const struct pipe_resource *templ,
++                                                    struct winsys_handle *whandle, unsigned usage);
++
+ static enum radeon_surf_mode si_choose_tiling(struct si_screen *sscreen,
+                                               const struct pipe_resource *templ,
+                                               bool tc_compatible_htile);
+@@ -791,6 +797,13 @@ static bool si_texture_get_handle(struct pipe_screen *screen, struct pipe_contex
     uint64_t modifier = DRM_FORMAT_MOD_INVALID;
     bool flush = false;
  
@@ -744,7 +756,7 @@ index e03baf3..1c48d17 100644
     ctx = threaded_context_unwrap_sync(ctx);
     sctx = ctx ? (struct si_context *)ctx : si_get_aux_context(sscreen, &sscreen->aux_context.general);
  
-@@ -1405,6 +1413,10 @@ static enum radeon_surf_mode si_choose_tiling(struct si_screen *sscreen,
+@@ -1405,6 +1418,10 @@ static enum radeon_surf_mode si_choose_tiling(struct si_screen *sscreen,
     if (templ->flags & SI_RESOURCE_FLAG_FORCE_LINEAR)
        return RADEON_SURF_MODE_LINEAR_ALIGNED;
  
@@ -755,8 +767,39 @@ index e03baf3..1c48d17 100644
     /* Avoid Z/S decompress blits by forcing TC-compatible HTILE on GFX8,
      * which requires 2D tiling.
      */
+@@ -1463,6 +1480,30 @@ si_texture_create_with_modifier(struct pipe_screen *screen,
+    struct si_screen *sscreen = (struct si_screen *)screen;
+    bool is_zs = util_format_is_depth_or_stencil(templ->format);
+ 
++   /* kmsro with a display device that allocates scan-out buffers itself (Exynos 2200):
++    * create the dumb buffer there and import it */
++   if (sscreen->ro && sscreen->ro->create_for_resource == renderonly_create_kms_dumb_buffer_for_resource &&
++       (templ->bind & PIPE_BIND_SCANOUT) && templ->target == PIPE_TEXTURE_2D && !is_zs &&
++       templ->nr_samples <= 1 && templ->last_level == 0 &&
++       (modifier == DRM_FORMAT_MOD_INVALID || modifier == DRM_FORMAT_MOD_LINEAR)) {
++      struct winsys_handle h = {0};
++      struct renderonly_scanout *so =
++         renderonly_scanout_for_resource((struct pipe_resource *)templ, sscreen->ro, &h);
++      struct pipe_resource *res;
++
++      if (!so)
++         return NULL;
++      h.modifier = DRM_FORMAT_MOD_LINEAR;
++      res = si_texture_from_handle(screen, templ, &h, PIPE_HANDLE_USAGE_FRAMEBUFFER_WRITE);
++      close(h.handle);
++      if (!res) {
++         renderonly_scanout_destroy(so, sscreen->ro);
++         return NULL;
++      }
++      ((struct si_texture *)res)->ro_scanout = so;
++      return res;
++   }
++
+    if (templ->nr_samples >= 2) {
+       /* This is hackish (overwriting the const pipe_resource template),
+        * but should be harmless and gallium frontends can also see
 diff --git a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
-index 2ead5db..bafe7db 100644
+index 2ead5db..5d68db4 100644
 --- a/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
 +++ b/src/gallium/winsys/kmsro/drm/kmsro_drm_winsys.c
 @@ -39,6 +39,9 @@
@@ -769,15 +812,22 @@ index 2ead5db..bafe7db 100644
  #include "util/u_memory.h"
  
  #include "loader.h"
-@@ -117,6 +120,12 @@ struct pipe_screen *kmsro_drm_screen_create(int kms_fd,
+@@ -117,6 +120,19 @@ struct pipe_screen *kmsro_drm_screen_create(int kms_fd,
  #if defined(GALLIUM_V3D)
           ro->create_for_resource = renderonly_create_kms_dumb_buffer_for_resource;
           screen = v3d_drm_screen_create_renderonly(ro->gpu_fd, ro, config);
 +#endif
 +      } else if (strcmp(render_dev_name, "amdgpu") == 0) {
 +#if defined(GALLIUM_RADEONSI)
-+         /* radeonsi allocates (linear for scan-out), the KMS device imports the dma-buf */
-+         ro->create_for_resource = renderonly_create_gpu_import_for_resource;
++         /* Exynos 2200's display driver scans out physically contiguous buffers only: it
++          * allocates them (dumb) and radeonsi imports them. simpledrm imports any dma-buf,
++          * so there radeonsi allocates and the KMS device imports. */
++         char *kms_name = loader_get_kernel_driver_name(kms_fd);
++
++         ro->create_for_resource = kms_name && strcmp(kms_name, "exynos2200") == 0 ?
++            renderonly_create_kms_dumb_buffer_for_resource :
++            renderonly_create_gpu_import_for_resource;
++         free(kms_name);
 +         screen = radeonsi_screen_create_renderonly(ro->gpu_fd, ro, config);
  #endif
        } else if (strcmp(render_dev_name, "vc4") == 0) {

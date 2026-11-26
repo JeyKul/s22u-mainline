@@ -1,7 +1,7 @@
 From ea4c2e10cf5cbda51d334fa2f4189f3677188048 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:12:35 +0100
-Subject: [PATCH 40/41] arm64: dts: exynos2200-b0s: CPU DVFS (OPP tables from
+Subject: [PATCH 40/43] arm64: dts: exynos2200-b0s: CPU DVFS (OPP tables from
  ACPM's map), PSCI over HVC
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

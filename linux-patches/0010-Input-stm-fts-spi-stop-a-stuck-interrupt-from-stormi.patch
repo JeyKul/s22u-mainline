@@ -1,7 +1,7 @@
 From 8b56ac4ed0c5ccf4bb578ec09266679bfdfc61e9 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:12:24 +0100
-Subject: [PATCH 10/41] Input: stm-fts-spi: stop a stuck interrupt from
+Subject: [PATCH 10/43] Input: stm-fts-spi: stop a stuck interrupt from
  storming
 
 If the event FIFO can't be read, the level interrupt stays asserted and

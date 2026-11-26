@@ -4,13 +4,14 @@
 #include <fcntl.h>
 #include <gbm.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
 
 int main(void)
 {
-	int fd = open("/dev/dri/card0", O_RDWR);
+	int fd = open(getenv("GBMTEST_CARD") ? getenv("GBMTEST_CARD") : "/dev/dri/card0", O_RDWR);
 	struct gbm_device *g = gbm_create_device(fd);
 	if (!g) { printf("gbm_create_device failed\n"); return 1; }
 	printf("gbm backend %s\n", gbm_device_get_backend_name(g));

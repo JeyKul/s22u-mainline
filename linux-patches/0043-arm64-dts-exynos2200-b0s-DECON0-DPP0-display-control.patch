@@ -1,0 +1,35 @@
+From 60f15085647e854bc390b34ff8b264192e0290dc Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:31:46 +0100
+Subject: [PATCH 43/43] arm64: dts: exynos2200-b0s: DECON0/DPP0 display
+ controller
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index db4e6a6c6..bcef2202e 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -523,6 +523,16 @@ pci@16e00000 {
+ 		dma-coherent;
+ 	};
+ 
++	/* takes over the scan-out S-Boot left running (DECON0 + DPP0): KMS, page flips */
++	display-controller@19f00000 {
++		compatible = "samsung,exynos2200-decon";
++		reg = <0x19f00000 0x10000>, <0x1ad00000 0x1000>;
++		reg-names = "decon", "dpp0-dma";
++		interrupts = <GIC_SPI 370 IRQ_TYPE_LEVEL_HIGH 0>;
++		interrupt-names = "frame_done";
++		memory-region = <&cont_splash_mem>;
++	};
++
+ 	/* takes over the DSI link S-Boot left running; panel brightness */
+ 	dsi@19eb0000 {
+ 		compatible = "samsung,exynos2200-dsim";
+-- 
+2.56.1
+

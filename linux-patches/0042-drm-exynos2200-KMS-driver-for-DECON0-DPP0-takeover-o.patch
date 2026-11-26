@@ -1,0 +1,452 @@
+From 9bd5f66358341b8ced897854fe5c9f5d8f3a8800 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:31:45 +0100
+Subject: [PATCH 42/43] drm/exynos2200: KMS driver for DECON0/DPP0 (takeover of
+ the boot display)
+
+DECON0 runs in command mode with the panel's TE as trigger, DPP0 reading a
+linear buffer, as S-Boot leaves them. This driver keeps the panel, DSI link
+and DSC as they are and owns the scan-out plane: GEM DMA (CMA) buffers with
+a 256-byte aligned pitch so the GPU can import them, page flips by writing
+DPP0's base address and stride and forcing its shadow registers to latch from
+DECON's frame-done interrupt (DECON is idle between a frame and the next TE,
+so no tearing), and vblank events at 120 Hz. simpledrm is removed through
+the aperture helpers.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/exynos2200/Kconfig            |  13 +
+ drivers/gpu/drm/exynos2200/Makefile           |   2 +
+ drivers/gpu/drm/exynos2200/exynos2200_decon.c | 389 ++++++++++++++++++
+ 3 files changed, 404 insertions(+)
+ create mode 100644 drivers/gpu/drm/exynos2200/exynos2200_decon.c
+
+diff --git a/drivers/gpu/drm/exynos2200/Kconfig b/drivers/gpu/drm/exynos2200/Kconfig
+index d06be0376..0b9a1084c 100644
+--- a/drivers/gpu/drm/exynos2200/Kconfig
++++ b/drivers/gpu/drm/exynos2200/Kconfig
+@@ -7,3 +7,16 @@ config DRM_EXYNOS2200_DSIM
+ 	  Exynos 2200 (DECON0, command mode, DSC) so that the panel accepts
+ 	  commands, and exposes the panel brightness as a backlight. Used on
+ 	  the Samsung Galaxy S22 Ultra together with simpledrm.
++
++config DRM_EXYNOS2200_DECON
++	tristate "Exynos 2200 DECON/DPP KMS (boot display takeover)"
++	depends on DRM && (ARCH_EXYNOS || COMPILE_TEST)
++	select DRM_CLIENT_SELECTION
++	select DRM_GEM_DMA_HELPER
++	select DRM_KMS_HELPER
++	select APERTURE_HELPERS
++	help
++	  KMS driver for the display that S-Boot leaves running on the
++	  Exynos 2200 (DECON0 in command mode, DPP0): page flips with GPU
++	  rendered buffers and vblank events, replacing simpledrm. The panel
++	  and the DSI link keep the bootloader's setup.
+diff --git a/drivers/gpu/drm/exynos2200/Makefile b/drivers/gpu/drm/exynos2200/Makefile
+index 88f72dc65..9d5fbdb78 100644
+--- a/drivers/gpu/drm/exynos2200/Makefile
++++ b/drivers/gpu/drm/exynos2200/Makefile
+@@ -2,3 +2,5 @@
+ ccflags-y += -I$(src)/cal
+ obj-$(CONFIG_DRM_EXYNOS2200_DSIM) += exynos2200-dsim.o
+ exynos2200-dsim-y := cal/dsim_reg.o exynos2200_dsim.o
++obj-$(CONFIG_DRM_EXYNOS2200_DECON) += exynos2200-decon.o
++exynos2200-decon-y := exynos2200_decon.o
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_decon.c b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+new file mode 100644
+index 000000000..d0b3d6dc6
+--- /dev/null
++++ b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+@@ -0,0 +1,389 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Exynos 2200 display (DECON0 + DPP0) as a KMS device, taking over what S-Boot left
++ * running: DECON0 in command mode with the panel's TE as hardware trigger, DSIM0 with
++ * DSC, DPP0 reading a linear 1440x3088 ARGB8888 buffer. The panel, DSI link and DSC
++ * stay as S-Boot set them up (exynos2200-dsim adds brightness); this driver owns the
++ * scan-out plane:
++ *
++ * - buffers are physically contiguous (GEM DMA, CMA): the DPU's SysMMU is not driven
++ *   yet, DPP0 reads physical addresses as S-Boot left it;
++ * - a flip writes DPP0's base address and stride and forces its shadow registers to
++ *   latch (RDMA_ENABLE.IDMA_SFR_UPDATE_FORCE) from DECON's frame-done interrupt: in
++ *   command mode DECON is idle between a frame and the next TE, so this cannot tear;
++ * - vblank is DECON's frame done (one per TE, 120 per second).
++ *
++ * Register names follow Samsung's DPU cal (regs-decon.h, regs-dpp.h).
++ */
++#include <linux/aperture.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/of_address.h>
++#include <linux/platform_device.h>
++#include <linux/spinlock.h>
++
++#include <drm/clients/drm_client_setup.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_drv.h>
++#include <drm/drm_fb_dma_helper.h>
++#include <drm/drm_fbdev_dma.h>
++#include <drm/drm_fourcc.h>
++#include <drm/drm_framebuffer.h>
++#include <drm/drm_gem_atomic_helper.h>
++#include <drm/drm_gem_dma_helper.h>
++#include <drm/drm_gem_framebuffer_helper.h>
++#include <drm/drm_managed.h>
++#include <drm/drm_modeset_helper_vtables.h>
++#include <drm/drm_probe_helper.h>
++#include <drm/drm_simple_kms_helper.h>
++#include <drm/drm_vblank.h>
++
++/* DECON0 main */
++#define DECON_INT_EN		0x0060
++#define INT_EN_FRAME_DONE	BIT(13)
++#define INT_EN			BIT(0)
++#define DECON_INT_PEND		0x0070
++#define INT_PEND_FRAME_DONE	BIT(13)
++
++/* DPP0 DMA (RDMA) */
++#define RDMA_ENABLE		0x0000
++#define IDMA_SFR_UPDATE_FORCE	BIT(4)
++#define RDMA_SRC_WIDTH		0x0010		/* line stride, in pixels */
++#define RDMA_BASEADDR_P0	0x0040
++#define DMA_SHD_OFFSET		0x0400		/* active (shadow) copies */
++
++#define PANEL_W			1440
++#define PANEL_H			3088
++#define PANEL_HZ		120		/* panel TE rate */
++#define PITCH_ALIGN		256		/* GPU (radeonsi) linear pitch alignment */
++
++struct e2200_decon {
++	struct drm_device drm;
++	struct drm_simple_display_pipe pipe;
++	struct drm_connector connector;
++	void __iomem *decon, *dma;
++	resource_size_t boot_fb, boot_fb_size;
++
++	spinlock_t lock;		/* pending flip, event */
++	dma_addr_t pending_addr;
++	u32 pending_stride;
++	bool pending;
++	struct drm_pending_vblank_event *event;
++};
++
++#define to_decon(d) container_of(d, struct e2200_decon, drm)
++
++static irqreturn_t e2200_decon_irq(int irq, void *data)
++{
++	struct e2200_decon *d = data;
++	u32 pend = readl(d->decon + DECON_INT_PEND);
++	struct drm_pending_vblank_event *event = NULL;
++	unsigned long flags;
++
++	if (!(pend & INT_PEND_FRAME_DONE))
++		return IRQ_NONE;
++	writel(INT_PEND_FRAME_DONE, d->decon + DECON_INT_PEND);
++
++	spin_lock_irqsave(&d->lock, flags);
++	if (d->pending) {
++		/* the frame went out; DPP0 is idle until the next TE */
++		writel(d->pending_stride, d->dma + RDMA_SRC_WIDTH);
++		writel(lower_32_bits(d->pending_addr), d->dma + RDMA_BASEADDR_P0);
++		writel(readl(d->dma + RDMA_ENABLE) | IDMA_SFR_UPDATE_FORCE, d->dma + RDMA_ENABLE);
++		d->pending = false;
++		event = d->event;	/* the old buffer is free from here on */
++		d->event = NULL;
++	}
++	spin_unlock_irqrestore(&d->lock, flags);
++
++	drm_crtc_handle_vblank(&d->pipe.crtc);
++	if (event) {
++		spin_lock_irqsave(&d->drm.event_lock, flags);
++		drm_crtc_send_vblank_event(&d->pipe.crtc, event);
++		spin_unlock_irqrestore(&d->drm.event_lock, flags);
++		drm_crtc_vblank_put(&d->pipe.crtc);
++	}
++	return IRQ_HANDLED;
++}
++
++static void e2200_decon_set_fb(struct e2200_decon *d, struct drm_plane_state *state,
++			       struct drm_pending_vblank_event *event)
++{
++	struct drm_framebuffer *fb = state->fb;
++	unsigned long flags;
++
++	spin_lock_irqsave(&d->lock, flags);
++	d->pending_addr = drm_fb_dma_get_gem_addr(fb, state, 0);
++	d->pending_stride = fb->pitches[0] / fb->format->cpp[0];
++	d->pending = true;
++	if (event && !drm_crtc_vblank_get(&d->pipe.crtc)) {
++		d->event = event;	/* sent once the flip is applied */
++		event = NULL;
++	}
++	spin_unlock_irqrestore(&d->lock, flags);
++
++	if (event) {	/* vblank still off (first modeset): nothing to wait for */
++		spin_lock_irqsave(&d->drm.event_lock, flags);
++		drm_crtc_send_vblank_event(&d->pipe.crtc, event);
++		spin_unlock_irqrestore(&d->drm.event_lock, flags);
++	}
++}
++
++static void e2200_pipe_enable(struct drm_simple_display_pipe *pipe,
++			      struct drm_crtc_state *crtc_state,
++			      struct drm_plane_state *plane_state)
++{
++	struct e2200_decon *d = to_decon(pipe->crtc.dev);
++
++	drm_crtc_vblank_on(&pipe->crtc);
++	if (plane_state->fb)
++		e2200_decon_set_fb(d, plane_state, NULL);
++}
++
++static void e2200_pipe_disable(struct drm_simple_display_pipe *pipe)
++{
++	/* the panel stays on: S-Boot's power state is all there is so far */
++	drm_crtc_vblank_off(&pipe->crtc);
++}
++
++static int e2200_pipe_check(struct drm_simple_display_pipe *pipe,
++			    struct drm_plane_state *plane_state,
++			    struct drm_crtc_state *crtc_state)
++{
++	struct drm_framebuffer *fb = plane_state->fb;
++
++	if (!fb)
++		return 0;
++	if (fb->width != PANEL_W || fb->height != PANEL_H ||
++	    plane_state->src_x || plane_state->src_y || plane_state->crtc_x || plane_state->crtc_y)
++		return -EINVAL;	/* one full-screen plane, no scaling (yet) */
++	if (fb->pitches[0] % 4 || fb->modifier != DRM_FORMAT_MOD_LINEAR)
++		return -EINVAL;
++	return 0;
++}
++
++static void e2200_pipe_update(struct drm_simple_display_pipe *pipe,
++			      struct drm_plane_state *old_state)
++{
++	struct e2200_decon *d = to_decon(pipe->crtc.dev);
++	struct drm_crtc *crtc = &pipe->crtc;
++	struct drm_pending_vblank_event *event = crtc->state->event;
++
++	crtc->state->event = NULL;
++	if (pipe->plane.state->fb && crtc->state->active) {
++		e2200_decon_set_fb(d, pipe->plane.state, event);
++		event = NULL;
++	}
++	if (event) {
++		spin_lock_irq(&crtc->dev->event_lock);
++		drm_crtc_send_vblank_event(crtc, event);
++		spin_unlock_irq(&crtc->dev->event_lock);
++	}
++}
++
++static int e2200_pipe_enable_vblank(struct drm_simple_display_pipe *pipe)
++{
++	return 0;	/* the frame-done interrupt stays on: it also applies flips */
++}
++
++static void e2200_pipe_disable_vblank(struct drm_simple_display_pipe *pipe)
++{
++}
++
++static const struct drm_simple_display_pipe_funcs e2200_pipe_funcs = {
++	.enable = e2200_pipe_enable,
++	.disable = e2200_pipe_disable,
++	.check = e2200_pipe_check,
++	.update = e2200_pipe_update,
++	.enable_vblank = e2200_pipe_enable_vblank,
++	.disable_vblank = e2200_pipe_disable_vblank,
++};
++
++static int e2200_connector_get_modes(struct drm_connector *connector)
++{
++	struct drm_display_mode *mode = drm_mode_create(connector->dev);
++	const int htotal = PANEL_W + 3, vtotal = PANEL_H + 3;
++
++	if (!mode)
++		return 0;
++	mode->hdisplay = PANEL_W;
++	mode->hsync_start = PANEL_W + 1;
++	mode->hsync_end = PANEL_W + 2;
++	mode->htotal = htotal;
++	mode->vdisplay = PANEL_H;
++	mode->vsync_start = PANEL_H + 1;
++	mode->vsync_end = PANEL_H + 2;
++	mode->vtotal = vtotal;
++	mode->clock = DIV_ROUND_UP(htotal * vtotal * PANEL_HZ, 1000);
++	mode->width_mm = 71;	/* 6.8" 19.3:9 */
++	mode->height_mm = 152;
++	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
++	drm_mode_set_name(mode);
++	drm_mode_probed_add(connector, mode);
++	connector->display_info.width_mm = mode->width_mm;
++	connector->display_info.height_mm = mode->height_mm;
++	return 1;
++}
++
++static const struct drm_connector_helper_funcs e2200_connector_helper_funcs = {
++	.get_modes = e2200_connector_get_modes,
++};
++
++static const struct drm_connector_funcs e2200_connector_funcs = {
++	.fill_modes = drm_helper_probe_single_connector_modes,
++	.destroy = drm_connector_cleanup,
++	.reset = drm_atomic_helper_connector_reset,
++	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
++	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
++};
++
++static const struct drm_mode_config_funcs e2200_mode_config_funcs = {
++	.fb_create = drm_gem_fb_create,
++	.atomic_check = drm_atomic_helper_check,
++	.atomic_commit = drm_atomic_helper_commit,
++};
++
++/* dumb buffers with a GPU-importable pitch */
++static int e2200_dumb_create(struct drm_file *file, struct drm_device *drm,
++			     struct drm_mode_create_dumb *args)
++{
++	args->pitch = ALIGN(DIV_ROUND_UP(args->width * args->bpp, 8), PITCH_ALIGN);
++	return drm_gem_dma_dumb_create_internal(file, drm, args);
++}
++
++DEFINE_DRM_GEM_DMA_FOPS(e2200_fops);
++
++static const struct drm_driver e2200_driver = {
++	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
++	DRM_GEM_DMA_DRIVER_OPS_WITH_DUMB_CREATE(e2200_dumb_create),
++	DRM_FBDEV_DMA_DRIVER_OPS,
++	.fops = &e2200_fops,
++	.name = "exynos2200",
++	.desc = "Exynos 2200 DECON",
++	.major = 1,
++	.minor = 0,
++};
++
++static const u32 e2200_formats[] = { DRM_FORMAT_XRGB8888 };	/* one opaque plane */
++static const u64 e2200_modifiers[] = { DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID };
++
++static int e2200_decon_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct e2200_decon *d;
++	struct drm_device *drm;
++	struct resource *res;
++	struct device_node *np;
++	struct resource fb;
++	int irq, ret;
++
++	d = devm_drm_dev_alloc(dev, &e2200_driver, struct e2200_decon, drm);
++	if (IS_ERR(d))
++		return PTR_ERR(d);
++	drm = &d->drm;
++	spin_lock_init(&d->lock);
++
++	/* shared with exynos2200-dsim (DECON trigger): map, don't claim */
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "decon");
++	d->decon = res ? devm_ioremap(dev, res->start, resource_size(res)) : NULL;
++	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dpp0-dma");
++	d->dma = res ? devm_ioremap(dev, res->start, resource_size(res)) : NULL;
++	if (!d->decon || !d->dma)
++		return -ENOMEM;
++	irq = platform_get_irq_byname(pdev, "frame_done");
++	if (irq < 0)
++		return irq;
++
++	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));	/* RDMA_BASEADDR_P0 is 32 bits */
++	if (ret)
++		return ret;
++
++	/* S-Boot's buffer: simpledrm goes, its memory stays until our first frame replaces it */
++	np = of_parse_phandle(dev->of_node, "memory-region", 0);
++	if (np && !of_address_to_resource(np, 0, &fb)) {
++		d->boot_fb = fb.start;
++		d->boot_fb_size = resource_size(&fb);
++		aperture_remove_conflicting_devices(fb.start, resource_size(&fb), e2200_driver.name);
++	}
++	of_node_put(np);
++
++	ret = drmm_mode_config_init(drm);
++	if (ret)
++		return ret;
++	drm->mode_config.min_width = drm->mode_config.max_width = PANEL_W;
++	drm->mode_config.min_height = drm->mode_config.max_height = PANEL_H;
++	drm->mode_config.funcs = &e2200_mode_config_funcs;
++	drm->mode_config.preferred_depth = 24;
++
++	drm_connector_helper_add(&d->connector, &e2200_connector_helper_funcs);
++	ret = drm_connector_init(drm, &d->connector, &e2200_connector_funcs, DRM_MODE_CONNECTOR_DSI);
++	if (ret)
++		return ret;
++	ret = drm_simple_display_pipe_init(drm, &d->pipe, &e2200_pipe_funcs, e2200_formats,
++					   ARRAY_SIZE(e2200_formats), e2200_modifiers, &d->connector);
++	if (ret)
++		return ret;
++	ret = drm_vblank_init(drm, 1);
++	if (ret)
++		return ret;
++	drm_mode_config_reset(drm);
++
++	ret = devm_request_irq(dev, irq, e2200_decon_irq, 0, dev_name(dev), d);
++	if (ret)
++		return ret;
++	writel(INT_PEND_FRAME_DONE, d->decon + DECON_INT_PEND);
++	writel(readl(d->decon + DECON_INT_EN) | INT_EN_FRAME_DONE | INT_EN, d->decon + DECON_INT_EN);
++
++	platform_set_drvdata(pdev, d);
++	ret = drm_dev_register(drm, 0);
++	if (ret)
++		return ret;
++	drm_client_setup(drm, NULL);
++	dev_info(dev, "DECON0 + DPP0, %dx%d@%d, scanning %pa\n", PANEL_W, PANEL_H, PANEL_HZ,
++		 &d->boot_fb);
++	return 0;
++}
++
++static void e2200_decon_remove(struct platform_device *pdev)
++{
++	struct e2200_decon *d = platform_get_drvdata(pdev);
++
++	drm_dev_unplug(&d->drm);
++	drm_atomic_helper_shutdown(&d->drm);
++	writel(readl(d->decon + DECON_INT_EN) & ~INT_EN_FRAME_DONE, d->decon + DECON_INT_EN);
++	/* back to S-Boot's buffer: it is the only memory sure to outlive us */
++	if (d->boot_fb) {
++		writel(PANEL_W, d->dma + RDMA_SRC_WIDTH);
++		writel(lower_32_bits(d->boot_fb), d->dma + RDMA_BASEADDR_P0);
++		writel(readl(d->dma + RDMA_ENABLE) | IDMA_SFR_UPDATE_FORCE, d->dma + RDMA_ENABLE);
++	}
++}
++
++static void e2200_decon_shutdown(struct platform_device *pdev)
++{
++	struct e2200_decon *d = platform_get_drvdata(pdev);
++
++	drm_atomic_helper_shutdown(&d->drm);
++}
++
++static const struct of_device_id e2200_decon_of_match[] = {
++	{ .compatible = "samsung,exynos2200-decon" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, e2200_decon_of_match);
++
++static struct platform_driver e2200_decon_driver = {
++	.probe = e2200_decon_probe,
++	.remove = e2200_decon_remove,
++	.shutdown = e2200_decon_shutdown,
++	.driver = {
++		.name = "exynos2200-decon",
++		.of_match_table = e2200_decon_of_match,
++	},
++};
++module_platform_driver(e2200_decon_driver);
++
++MODULE_DESCRIPTION("Exynos 2200 DECON0/DPP0 KMS driver (takeover of the boot display)");
++MODULE_LICENSE("GPL");
+-- 
+2.56.1
+
