@@ -108,6 +108,21 @@ elif [ ! -x /newroot/sbin/init ] && [ ! -L /newroot/sbin/init ]; then
 	log "no /sbin/init on $root: staying in the initramfs"
 	umount /newroot
 else
+	# another system in a directory of userdata: /.b0s-boot-once (one boot, then deleted, so a
+	# failed boot falls back) or /.b0s-root (every boot), each holding the directory name
+	alt=""
+	if [ -f /newroot/.b0s-boot-once ]; then
+		alt=$(head -n1 /newroot/.b0s-boot-once); rm -f /newroot/.b0s-boot-once; sync
+	elif [ -f /newroot/.b0s-root ]; then
+		alt=$(head -n1 /newroot/.b0s-root)
+	fi
+	case "$alt" in */*|.*) alt="";; esac
+	if [ -n "$alt" ] && { [ -x "/newroot/$alt/sbin/init" ] || [ -L "/newroot/$alt/sbin/init" ]; }; then
+		log "root: /$alt on $root"
+		mkdir -p /altroot && mount --bind "/newroot/$alt" /altroot
+		umount -l /newroot
+		mount --move /altroot /newroot
+	fi
 	log "switching to $root"
 	cp /tmp/dmesg.boot /newroot/var/log/dmesg.initramfs 2>/dev/null
 	# hand the USB serial over to the new system's getty

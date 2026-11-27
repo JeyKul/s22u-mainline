@@ -14,7 +14,10 @@
 - NetworkManager enabled (usb0 unmanaged, stable cloned MAC: nvram MAC is 00:90:4c:4b:20:01,
   powersave off). usb0 default route metric 2000 so Wi-Fi wins.
 - Open: firmware asserts (pc 27088a, write to 0) after 2-8 min, reason unknown (host_cap
-  NO_OOB_DW made it assert at boot); brcmfmac now resets the bus on the trap flag.
+  NO_OOB_DW made it assert at boot; roamoff=1 and powersave off change nothing); brcmfmac now
+  checks the trap flag on each doorbell and resets the bus: firmware back in ~2 s, NM reconnects.
+- initramfs: /.b0s-boot-once (one boot) or /.b0s-root on userdata naming a directory with its own
+  /sbin/init boots that as root (for trying ztOS next to the Arch install).
   Invalid 6 GHz chanspec warning in brcmutil.
 
 ## 2026-11-27: battery gauge
