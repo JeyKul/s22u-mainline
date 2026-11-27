@@ -1,5 +1,10 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: RTC, module installer
+- PMIC RTC (ACPM type 0x04, msec at 0x04, sec..year 0x05..0x0b, binary; RUDR/WUDR in 0x02) as rtc0;
+  it had run since 2021-01-02 unset. Set from the PC, TZ Europe/Berlin.
+- tools/install-modules.sh: builds modules (src/build-direct), installs over SSH, depmod.
+
 ## 2026-11-27: power + volume-down keys
 - s2mps25-acpm: input "s2mps25-keys" from VGPIO IRQ (SPI 37); INT1 bit1/0 power press/release,
   INT3 bit7/6 vol-down. powerdevil PowerButtonAction=ToggleScreenOnOff. Press not yet seen live.

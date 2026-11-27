@@ -1,0 +1,137 @@
+From fb20239ed1b0972f8337b51ac1a313773ee231d9 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:14:45 +0100
+Subject: [PATCH 48/48] regulator: s2mps25-acpm: RTC
+
+The S2MPS25's RTC over ACPM (block 0x04, binary, 24 h): reads latched with
+UPDATE.RUDR, writes committed with UPDATE.WUDR. Layout from Samsung's
+rtc-s2mps25.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts |  1 +
+ drivers/regulator/s2mps25-acpm.c              | 82 +++++++++++++++++++
+ 2 files changed, 83 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index ae6da8440..cf0fd4efa 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -259,6 +259,7 @@ pmic-main {
+ 				compatible = "samsung,s2mps25-pmic";
+ 				/* PMIC events via the VGPIO block: power and volume-down keys */
+ 				interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH 0>;
++				samsung,rtc;
+ 
+ 				regulators {
+ 					ldo28m: ldo28m {
+diff --git a/drivers/regulator/s2mps25-acpm.c b/drivers/regulator/s2mps25-acpm.c
+index f5d7fa8c5..6863271b1 100644
+--- a/drivers/regulator/s2mps25-acpm.c
++++ b/drivers/regulator/s2mps25-acpm.c
+@@ -14,6 +14,7 @@
+ #include <linux/io.h>
+ #include <linux/of_irq.h>
+ #include <linux/module.h>
++#include <linux/rtc.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/regmap.h>
+@@ -293,6 +294,84 @@ static int s2mps_keys_init(struct device *dev, struct s2mps_acpm *pmic)
+ 	return 0;
+ }
+ 
++
++/*
++ * The PMIC's RTC (register block 0x04): binary, 24 h, msec..year at 0x04..0x0b. Reads latch
++ * through UPDATE.RUDR, writes through UPDATE.WUDR. Layout from Samsung's rtc-s2mps25.
++ */
++#define S2MPS_TYPE_RTC		0x04
++#define S2MPS_RTC_UPDATE	0x02
++#define S2MPS_RTC_RUDR		BIT(0)
++#define S2MPS_RTC_WUDR		BIT(1)
++#define S2MPS_RTC_SEC		0x05
++#define S2MPS_RTC_HOUR_PM	BIT(6)
++
++static int s2mps_rtc_latch(struct s2mps_acpm *pmic, u8 bit)
++{
++	u8 v = bit;
++	int ret = s2mps_pm_rw(pmic, S2MPS_TYPE_RTC, S2MPS_RTC_UPDATE, &v, true);
++
++	usleep_range(1000, 1500);
++	return ret;
++}
++
++static int s2mps_rtc_read_time(struct device *dev, struct rtc_time *tm)
++{
++	struct s2mps_acpm *pmic = dev_get_drvdata(dev);
++	u8 d[7];
++	int i, ret;
++
++	ret = s2mps_rtc_latch(pmic, S2MPS_RTC_RUDR);
++	for (i = 0; !ret && i < 7; i++)
++		ret = s2mps_pm_rw(pmic, S2MPS_TYPE_RTC, S2MPS_RTC_SEC + i, &d[i], false);
++	if (ret)
++		return ret;
++	tm->tm_sec = d[0] & 0x7f;
++	tm->tm_min = d[1] & 0x7f;
++	tm->tm_hour = d[2] & 0x1f;
++	tm->tm_wday = d[3] & 0x7f ? __fls(d[3] & 0x7f) : 0;
++	tm->tm_mday = d[4] & 0x1f;
++	tm->tm_mon = (d[5] & 0x0f) - 1;
++	tm->tm_year = (d[6] & 0x7f) + 100;
++	return 0;
++}
++
++static int s2mps_rtc_set_time(struct device *dev, struct rtc_time *tm)
++{
++	struct s2mps_acpm *pmic = dev_get_drvdata(dev);
++	u8 d[7] = {
++		tm->tm_sec, tm->tm_min,
++		tm->tm_hour | (tm->tm_hour >= 12 ? S2MPS_RTC_HOUR_PM : 0),
++		BIT(tm->tm_wday), tm->tm_mday, tm->tm_mon + 1, tm->tm_year - 100,
++	};
++	int i, ret = 0;
++
++	for (i = 0; !ret && i < 7; i++)
++		ret = s2mps_pm_rw(pmic, S2MPS_TYPE_RTC, S2MPS_RTC_SEC + i, &d[i], true);
++	return ret ?: s2mps_rtc_latch(pmic, S2MPS_RTC_WUDR);
++}
++
++static const struct rtc_class_ops s2mps_rtc_ops = {
++	.read_time = s2mps_rtc_read_time,
++	.set_time = s2mps_rtc_set_time,
++};
++
++static int s2mps_rtc_init(struct device *dev, struct s2mps_acpm *pmic)
++{
++	struct rtc_device *rtc;
++
++	if (!of_property_read_bool(dev->of_node, "samsung,rtc"))
++		return 0;
++	dev_set_drvdata(dev, pmic);
++	rtc = devm_rtc_allocate_device(dev);
++	if (IS_ERR(rtc))
++		return PTR_ERR(rtc);
++	rtc->ops = &s2mps_rtc_ops;
++	rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
++	rtc->range_max = RTC_TIMESTAMP_END_2099;
++	return devm_rtc_register_device(rtc);
++}
++
+ struct s2mps_acpm_data {
+ 	const struct regulator_desc *descs;
+ 	unsigned int num_descs;
+@@ -326,6 +405,9 @@ static int s2mps_acpm_probe(struct platform_device *pdev)
+ 	ret = s2mps_keys_init(dev, pmic);
+ 	if (ret)
+ 		dev_warn(dev, "keys: %d\n", ret);
++	ret = s2mps_rtc_init(dev, pmic);
++	if (ret)
++		dev_warn(dev, "rtc: %d\n", ret);
+ 
+ 	regs_np = of_get_child_by_name(dev->of_node, "regulators");
+ 	if (!regs_np)
+-- 
+2.56.1
+

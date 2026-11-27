@@ -1,7 +1,7 @@
 From 04e37fd5e1b1da999b05c5f2cbee95298593c519 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 17:47:18 +0100
-Subject: [PATCH 20/47] arm64: dts: exynos2200-b0s: add a ramoops region
+Subject: [PATCH 20/48] arm64: dts: exynos2200-b0s: add a ramoops region
 
 Keeps the kernel log across a warm reset, so a panic can be read back
 from pstore on the next boot.
