@@ -1,0 +1,16 @@
+# ztOSIAL manifest: Samsung Galaxy S22 Ultra (SM-S908B, b0s, Exynos 2200) on mainline Linux.
+# Everything generic for now; ztOS hides what is not there.
+
+[device]
+codename = "b0s"
+name = "Samsung Galaxy S22 Ultra"
+form_factor = "phone"
+scale = 4.0
+
+[gsi]
+min = "0.2.0"
+
+[android]
+binder = "binderfs"
+gralloc = "gbm"
+memory_budget_mb = 2048
