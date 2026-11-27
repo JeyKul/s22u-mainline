@@ -1,0 +1,10 @@
+#!/bin/sh
+# BeamNG.drive (Windows ARM64 build in /opt/beamng) under aarch64 Wine (/opt/wine, tools/wine-cross.sh),
+# Wine's Wayland driver, the game's own Vulkan renderer on RADV. Run as the desktop user.
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-beamng} WINEDLLOVERRIDES=mscoree,mshtml= WINEDEBUG=${WINEDEBUG:-err+all,fixme-all}
+export PATH=/opt/wine/bin:$PATH
+if [ ! -d "$WINEPREFIX" ]; then
+	wineboot -i && wine reg add 'HKCU\Software\Wine\Drivers' /v Graphics /d wayland /f && wineserver -w
+fi
+cd /opt/beamng/BinArm64
+exec xclipse-env wine BeamNG.drive.arm64.exe -gfx vk "$@"

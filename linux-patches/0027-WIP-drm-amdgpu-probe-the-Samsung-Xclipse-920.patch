@@ -1,7 +1,7 @@
 From 754fbd585cc4270bbd36ec4b8bb2e6104a8101bf Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 21:52:32 +0100
-Subject: [PATCH 27/55] WIP: drm/amdgpu: probe the Samsung Xclipse 920
+Subject: [PATCH 27/56] WIP: drm/amdgpu: probe the Samsung Xclipse 920
 
 Explicit 1002:163F entry (CHIP_VANGOGH | AMD_IS_APU) when the Exynos 2200
 PCI shim is built, hardcoded register bases instead of IP discovery.

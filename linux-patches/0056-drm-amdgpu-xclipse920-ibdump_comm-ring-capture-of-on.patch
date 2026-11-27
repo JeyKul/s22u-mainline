@@ -1,0 +1,111 @@
+From bb58169a16d0a41ea5e71482ae10d4ed867928fa Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 00:11:48 +0100
+Subject: [PATCH 56/56] drm/amdgpu: xclipse920: ibdump_comm, ring capture of
+ one process's last 64 submissions
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../gpu/drm/amd/amdgpu/xclipse920_compat.c    | 51 ++++++++++++++++---
+ 1 file changed, 45 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
+index 4b3ea684b..a86981dba 100644
+--- a/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
++++ b/drivers/gpu/drm/amd/amdgpu/xclipse920_compat.c
+@@ -161,7 +161,20 @@ static void xcpatch_ib(u32 *ib, u32 ndw)
+ 
+ #define IBDUMP_SIZE	(8 << 20)
+ static u32 *ibdump_buf;
+-static size_t ibdump_len;	/* in dwords */
++static size_t ibdump_len, ibdump_end = IBDUMP_SIZE / 4;	/* in dwords */
++static bool ibdump_skip;
++
++/*
++ * ibdump_comm=NAME: capture only submissions of processes whose name contains NAME, endlessly,
++ * into 64 slots of 128 KB (the last 64 submissions; slot = seq % 64). Each slot starts with a record
++ * of depth 0xfe (va = sequence number, ring = pid) and ends at a zero dword. For hangs that come
++ * after many submissions: CP_IB1_BASE from the devcoredump names the slot.
++ */
++static char ibdump_comm[16];
++module_param_string(ibdump_comm, ibdump_comm, sizeof(ibdump_comm), 0644);
++MODULE_PARM_DESC(ibdump_comm, "Xclipse 920: capture the last 64 submissions of this process (name substring)");
++#define IBDUMP_SLOTS	64
++static u64 ibdump_seq;
+ static DEFINE_MUTEX(ibdump_lock);
+ static struct debugfs_blob_wrapper ibdump_blob;
+ 
+@@ -211,7 +224,8 @@ static void ibdump_ib(struct amdgpu_cs_parser *p, u64 va, u32 ndw, u32 depth, u3
+ 	ib = (u32 *)((u8 *)ib + va - m->start * AMDGPU_GPU_PAGE_SIZE);
+ 	if (depth != 0x80 && (xcpatch_n || xcrelmem_n == 4 || xcnop_n))
+ 		xcpatch_ib(ib, ndw);
+-	if (!ibdump_buf || READ_ONCE(xclipse920_ibdump_left) < 0 || ibdump_len + 6 + ndw > IBDUMP_SIZE / 4)
++	if (!ibdump_buf || ibdump_skip || (!ibdump_comm[0] && READ_ONCE(xclipse920_ibdump_left) < 0) ||
++	    ibdump_len + 6 + ndw + 1 > ibdump_end)
+ 		goto chase;
+ 
+ 	ibdump_buf[ibdump_len++] = 0x1bd0;
+@@ -253,7 +267,8 @@ void xclipse920_ibdump(struct amdgpu_cs_parser *p)
+ 	unsigned int j, i;
+ 
+ 	if (!amdgpu_is_xclipse920(adev) ||
+-	    (READ_ONCE(xclipse920_ibdump_left) <= 0 && !xcpatch_str[0] && !xcpatch_n && xcrelmem_n != 4 && !xcnop_n))
++	    (READ_ONCE(xclipse920_ibdump_left) <= 0 && !ibdump_comm[0] && !xcpatch_str[0] && !xcpatch_n &&
++	     xcrelmem_n != 4 && !xcnop_n))
+ 		return;
+ 	mutex_lock(&ibdump_lock);
+ 	xcpatch_parse();
+@@ -265,7 +280,25 @@ void xclipse920_ibdump(struct amdgpu_cs_parser *p)
+ 		debugfs_create_blob("xclipse_ibdump", 0400, adev_to_drm(adev)->primary->debugfs_root,
+ 				    &ibdump_blob);
+ 	}
+-	xclipse920_ibdump_left--;	/* < 0: patch only, no capture */
++	ibdump_skip = false;
++	if (ibdump_comm[0]) {
++		if (!strstr(current->comm, ibdump_comm) && !strstr(current->group_leader->comm, ibdump_comm)) {
++			ibdump_skip = true;
++		} else {
++			ibdump_len = (ibdump_seq % IBDUMP_SLOTS) * (IBDUMP_SIZE / 4 / IBDUMP_SLOTS);
++			ibdump_end = ibdump_len + IBDUMP_SIZE / 4 / IBDUMP_SLOTS;
++			ibdump_buf[ibdump_len++] = 0x1bd0;
++			ibdump_buf[ibdump_len++] = 0xfe;
++			ibdump_buf[ibdump_len++] = 0;
++			ibdump_buf[ibdump_len++] = lower_32_bits(ibdump_seq);
++			ibdump_buf[ibdump_len++] = upper_32_bits(ibdump_seq);
++			ibdump_buf[ibdump_len++] = task_tgid_nr(current);
++			ibdump_seq++;
++		}
++	} else {
++		ibdump_end = IBDUMP_SIZE / 4;
++		xclipse920_ibdump_left--;	/* < 0: patch only, no capture */
++	}
+ 	for (j = 0; j < p->gang_size; j++) {
+ 		struct amdgpu_job *job = p->jobs[j];
+ 
+@@ -277,7 +310,7 @@ void xclipse920_ibdump(struct amdgpu_cs_parser *p)
+ 	for (i = 0; i < ARRAY_SIZE(ibdump_pgm_reg); i++) {
+ 		u64 pgm = ((u64)ibdump_pgm[i][1] << 40) | ((u64)ibdump_pgm[i][0] << 8);
+ 
+-		if ((ibdump_pgm[i][0] || ibdump_pgm[i][1]) && ibdump_buf && xclipse920_ibdump_left >= 0)
++		if ((ibdump_pgm[i][0] || ibdump_pgm[i][1]) && ibdump_buf && (ibdump_comm[0] || xclipse920_ibdump_left >= 0))
+ 			ibdump_ib_raw(p, pgm, 512, 0x100 + i);
+ 		ibdump_pgm[i][0] = ibdump_pgm[i][1] = 0;
+ 	}
+@@ -297,7 +330,13 @@ void xclipse920_ibdump(struct amdgpu_cs_parser *p)
+ 				ibdump_ib_raw(p, va, ndw, 0x1ff);
+ 		}
+ 	}
+-	ibdump_blob.size = ibdump_len * 4;
++	if (ibdump_comm[0]) {
++		if (!ibdump_skip && ibdump_len < ibdump_end)
++			ibdump_buf[ibdump_len] = 0;	/* end of this slot */
++		ibdump_blob.size = IBDUMP_SIZE;
++	} else {
++		ibdump_blob.size = ibdump_len * 4;
++	}
+ out:
+ 	mutex_unlock(&ibdump_lock);
+ }
+-- 
+2.56.1
+

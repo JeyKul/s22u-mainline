@@ -1,5 +1,21 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: BeamNG.drive (Windows ARM64) under Wine: starts, Vulkan on RADV, then GPU hang
+- `beamng` (rootfs overlay): Wine 11.23 aarch64, Wayland driver, `-gfx vk`. Reaches the Vulkan device,
+  swapchain 1280x720, CEF UI processes; ~12 s later (game time, not uptime) the GFX ring hangs. Not
+  DVFS (gov_enable=0 at 303 MHz), not mesh shaders (0x9f in ibdecode was LOAD_CONTEXT_REG_INDEX, fixed;
+  the real TASKMESH op is 0x4d), not HTILE/DCC/FMASK (RADV_DEBUG=nohiz,nodcc,nofmask), not the I$
+  (tools/icache.c: fresh code each submission, with or without ACQUIRE_MEM).
+- Capture: amdgpu ibdump_comm=BeamNG (last 64 submissions of that process, 128 KB slots),
+  tools/ibslots.py splits, tools/bn-hang.sh = reboot + run + capture + CP regs + tools/waves.py
+  (live waves + SGPRs via debugfs amdgpu_wave/amdgpu_gpr).
+- Every hang: CP in the same 400-dw IB, a RADV blit (full-screen rect, ES 0x...5c00 + PS sampling a
+  2D-array image, wave64) -> most likely the present/WSI copy. GRBM: SPI+TA/TCP busy, no fault.
+  One run: 128 waves alive, all looping at PS+0xe0c..0xe78, far past the blit PS's s_endpgm
+  (code at submission time is correct). Other runs: no live waves (SPI busy only).
+- Next: dump the code at PS+0xe00 at hang time (xcdumpva quoting in bn-hang.sh was broken), check
+  the blit's T# (s[8:15] = 01334260 c3900080 00b3c13f 91b00fac 0 00400000 0 0) against gfx11 layout.
+
 ## 2026-11-27 (late): CPU thermal zones, charging at 1.3 A, Wine for the phone
 - exynos2200-acpm-tmu: TMU zones 0-2 (BIG MID LITTLE) via ACPM as DT thermal zones, cpufreq
   cooling per cluster: passive 80 C, critical 105 C. Builds under full load died silently before
