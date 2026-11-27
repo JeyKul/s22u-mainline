@@ -1,5 +1,11 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: charger driver
+- Mainline max77705-charger as a standalone node (charger@69, IRQ gpa0-0 low, simple-battery 4.4 V
+  / 3150 mA / 5000 mAh). INTSRC (0x66:0x22) had USB-C pending and unmasked after boot (0x08, mask
+  0x07): with no MFD nothing clears it -> the probe now masks all but CHG (mask 0x0e). 0 spurious IRQs.
+- sysfs max77705-charger: online 1, Charging, Good, 1.5 A / 1.5 A, 4.4 V. ztMETRO reads sysfs.
+
 ## 2026-11-28: ztOS boots (default now)
 - First ztOS boots froze ~1.5 s into systemd: udev autoloaded amdgpu before the G3D power-up (Arch has
   /etc/modprobe.d/amdgpu-manual.conf, ztOS did not). Now in rootfs/overlay and the layer.

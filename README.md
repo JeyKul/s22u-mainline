@@ -26,12 +26,12 @@ minimum target: GPU, display, HDMI.
 | ACPM (APM co-processor IPC) | ✅ | Mainline gs101 driver + Exynos 2200 variant (SRAM init data 0xf800, exynos850 mailbox, SPMI PMIC format) |
 | PMIC: S2MPS25/S2MPS26/S2MPM07 | ✅ | New `s2mps25-acpm` driver (SID 0/1/2): DT-listed rails, power/volume-down keys, RTC (rtc0), S2MPS26 GPIOs (WLAN_EN) |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
-| Thermal (TMU) | 🟡 | All 7 zones read over ACPM by the GPU governor (throttles G3D); no thermal zones for the CPUs yet |
+| Thermal (TMU) | ✅ | All 7 zones over ACPM: GPU governor throttles G3D; CPU clusters as thermal zones (exynos2200-acpm-tmu), cpufreq cooling from 80 C, critical 105 C |
 | Watchdog | ⬜ | uniLoader turns it off |
 | Back to TWRP | ✅ | `twrp`, `reboot recovery`, Volume Up held 2 s |
 | Volume Up | ✅ | GPIO key |
 | Power, Volume Down | ✅ | PMIC keys via the VGPIO interrupt; power toggles the screen |
-| Battery, charging: MAX77705 + fuel gauge | 🟡 | Fuel gauge (max17042 driver, i2c-gpio): level, voltage, current in UPower. Charging runs on the chip's defaults (~500 mA input); no charger driver |
+| Battery, charging: MAX77705 + fuel gauge | ✅ | Fuel gauge (max17042, i2c-gpio): level, voltage, current. Charger: mainline max77705-charger (online/status/health, interrupt on gpa0-0); b0s-charge.service sets 1.5 A input / 1.5 A charge (~1.3 A into the battery). No USB-PD/fast charging yet |
 | Vibration | ⬜ | |
 | Suspend | ⬜ | |
 

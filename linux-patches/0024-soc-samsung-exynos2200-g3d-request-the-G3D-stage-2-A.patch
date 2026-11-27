@@ -1,7 +1,7 @@
 From 78ed8b6a36da12a0334fffee4703e418b1ea8454 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 21:35:04 +0100
-Subject: [PATCH 24/56] soc: samsung: exynos2200-g3d: request the G3D stage-2
+Subject: [PATCH 24/57] soc: samsung: exynos2200-g3d: request the G3D stage-2
  AP before the RLC boot
 
 After a successful firmware verification, Samsung's imgloader asks EL2 to

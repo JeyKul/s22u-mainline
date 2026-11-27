@@ -1,7 +1,7 @@
 From 32085502bb8287083f9b0da89e4ea4b4cbb13b0e Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 18:33:44 +0100
-Subject: [PATCH 51/56] regulator: s2mps25-acpm: S2MPS26 GPIOs; dts: b0s PCIe
+Subject: [PATCH 51/57] regulator: s2mps25-acpm: S2MPS26 GPIOs; dts: b0s PCIe
  Wi-Fi channel
 
 S2MPS26 GPIO outputs (level through the VGPIO block in SYSREG_ALIVE),

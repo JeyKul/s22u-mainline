@@ -1,0 +1,114 @@
+From 64330d4d0759ae33038963700d28ae76b6e1a26a Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 00:33:05 +0100
+Subject: [PATCH 57/57] power: max77705: charger on b0s without the MFD; fix
+ input limit setter
+
+The S22 Ultra's MAX77705 charger runs as a standalone I2C device (gpa0-0
+interrupt). Without the MFD driver a pending USB-C source holds the shared
+line low, so only the charger source is unmasked at the top level. The
+input current setter wrote one 25 mA step more than the getter reads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 25 +++++++++++++++++++
+ drivers/power/supply/max77705_charger.c       | 22 +++++++++++++++-
+ 2 files changed, 46 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 89f7f8138..e5e1d2d38 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -66,6 +66,25 @@ fuel-gauge@36 {
+ 			reg = <0x36>;
+ 			maxim,rsns-microohm = <2000>;	/* Samsung: fg_resistor 5 = 2 mOhm */
+ 		};
++
++		/* MAX77705 charger; its interrupt is the whole chip's (gpa0-0, Samsung max77705,irq-gpio) */
++		charger@69 {
++			compatible = "maxim,max77705-charger";
++			reg = <0x69>;
++			interrupt-parent = <&gpa0>;
++			interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
++			pinctrl-0 = <&chg_irq>;
++			pinctrl-names = "default";
++			monitored-battery = <&battery>;
++		};
++	};
++
++	/* Samsung's battery data: 4.4 V float, 3150 mA fast charge, 5000 mAh */
++	battery: battery {
++		compatible = "simple-battery";
++		voltage-max-design-microvolt = <4400000>;
++		charge-full-design-microamp-hours = <5000000>;
++		constant-charge-current-max-microamp = <3150000>;
+ 	};
+ 
+ 	gpio-keys {
+@@ -714,6 +733,12 @@ touch_irq: touch-irq-pins {
+ 		samsung,pin-drv = <EXYNOS7_PIN_DRV_LV1>;
+ 	};
+ 
++	chg_irq: chg-irq-pins {
++		samsung,pins = "gpa0-0";
++		samsung,pin-function = <EXYNOS_PIN_FUNC_EINT>;
++		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
++	};
++
+ 	key_volup: key-volup-pins {
+ 		samsung,pins = "gpa3-0";
+ 		samsung,pin-function = <EXYNOS_PIN_FUNC_F>;
+diff --git a/drivers/power/supply/max77705_charger.c b/drivers/power/supply/max77705_charger.c
+index 63b0b4f0c..e2bee7dac 100644
+--- a/drivers/power/supply/max77705_charger.c
++++ b/drivers/power/supply/max77705_charger.c
+@@ -14,6 +14,7 @@
+ #include <linux/mfd/max77705-private.h>
+ #include <linux/power/max77705_charger.h>
+ #include <linux/module.h>
++#include <linux/of.h>
+ #include <linux/platform_device.h>
+ #include <linux/power_supply.h>
+ #include <linux/regmap.h>
+@@ -443,11 +444,12 @@ static int max77705_set_property(struct power_supply *psy,
+ 					   val->intval);
+ 		break;
+ 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT:
++		/* register value n means (n + 1) * 25 mA, as max77705_get_input_current() reads it */
+ 		err = max77705_set_integer(chg, MAX77705_CHG_CHGIN_LIM,
+ 					   MAX77705_CURRENT_CHGIN_MIN,
+ 					   MAX77705_CURRENT_CHGIN_MAX,
+ 					   MAX77705_CURRENT_CHGIN_STEP,
+-					   val->intval);
++					   val->intval - MAX77705_CURRENT_CHGIN_STEP);
+ 		break;
+ 	default:
+ 		err = -EINVAL;
+@@ -614,6 +616,24 @@ static int max77705_charger_probe(struct i2c_client *i2c)
+ 	chg->dev = dev;
+ 	i2c_set_clientdata(i2c, chg);
+ 
++	/*
++	 * Without the MFD driver nobody services the other interrupt sources, and a
++	 * pending one (USB-C after boot) holds the shared line low: let only the
++	 * charger through the top-level mask.
++	 */
++	if (!of_device_is_compatible(dev->parent->of_node, "maxim,max77705")) {
++		struct i2c_client *top = i2c_new_dummy_device(i2c->adapter, 0x66);
++
++		if (!IS_ERR(top)) {
++			ret = i2c_smbus_read_byte_data(top, MAX77705_PMIC_REG_INTSRC_MASK);
++			if (ret >= 0)
++				i2c_smbus_write_byte_data(top, MAX77705_PMIC_REG_INTSRC_MASK,
++					(ret | MAX77705_SRC_IRQ_TOP | MAX77705_SRC_IRQ_FG |
++					 MAX77705_SRC_IRQ_USBC) & ~MAX77705_SRC_IRQ_CHG);
++			i2c_unregister_device(top);
++		}
++	}
++
+ 	chip_desc = devm_kmemdup(dev, &max77705_charger_irq_chip,
+ 				 sizeof(max77705_charger_irq_chip),
+ 				 GFP_KERNEL);
+-- 
+2.56.1
+
