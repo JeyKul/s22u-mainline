@@ -1,5 +1,13 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: ztOS staged in /ztos (not booted yet)
+- ztOS 0.2.3-BETA-1.3 qemu image's root partition copied to /ztos on userdata; tools/ztos-layer.sh
+  adds our modules, firmware (sgpu, vangogh, brcm 4389), /opt/mesa-xc, GPU bring-up, usb0/sshd, Wi-Fi
+  profile, ztos/session.env (wlroots on the DECON card, kmsro), ztos/vendor/ztos/manifest.toml.
+- First --boot-once did nothing: the flashed boot image still had the old initramfs (mkboot-direct.sh
+  does not rebuild it). Next: initramfs/build.sh, mkboot-direct.sh, flash, tools/ztos-layer.sh
+  --boot-once, reboot, check greetd/ztmetro log (~zerone/.local/state/ztmetro.log).
+
 ## 2026-11-27: Wi-Fi works (PCIe + brcmfmac BCM4389)
 - PCIe ch0 driver (pcie-exynos2200, module): HSI1 on (PMU 0x15862580, TZPC SMC 0x82000410 ->
   a1 = domain, then HVC 0xc6000108(1, a1) restores the S2MPU or device DMA fails), CMU_HSI1
