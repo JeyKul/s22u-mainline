@@ -1,5 +1,22 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: Wi-Fi works (PCIe + brcmfmac BCM4389)
+- PCIe ch0 driver (pcie-exynos2200, module): HSI1 on (PMU 0x15862580, TZPC SMC 0x82000410 ->
+  a1 = domain, then HVC 0xc6000108(1, a1) restores the S2MPU or device DMA fails), CMU_HSI1
+  user muxes, gpf0 CLKREQ/PERST, PMU 0x71c/0x3b20, Samsung's S5E9925 cal PHY table, LTSSM via ELBI
+  0x54, L0 = ELBI 0x2c8 & 0x3f == 0x11. Gen2 x1. MSIs: DWC iMSI behind ELBI IRQ2 bit 17 (SPI 494).
+  No ASPM (L1 without Samsung's IA sequencer -> all-ones reads). WLAN_EN = S2MPS26 GPIO 18 (new
+  gpio chip in s2mps25-acpm; level through VGPIO 0x1582082c + pin/4*4).
+- DANGER: /sys/kernel/debug/pinctrl/*/pins reads pinctrl_hsi1 (domain off) -> freeze + reboot;
+  SysMMU 0x1128000c also froze. Watchdog brings the phone back.
+- brcmfmac (see commit): CA7/SYSMEM sizes, BAR1 window switching, DAR power request, versioned
+  join, DS NAK, 2048 rx ids. Firmware from vendor: tools/install-wifi-fw.sh.
+- NetworkManager enabled (usb0 unmanaged, stable cloned MAC: nvram MAC is 00:90:4c:4b:20:01,
+  powersave off). usb0 default route metric 2000 so Wi-Fi wins.
+- Open: firmware asserts (pc 27088a, write to 0) after 2-8 min, reason unknown (host_cap
+  NO_OOB_DW made it assert at boot); brcmfmac now resets the bus on the trap flag.
+  Invalid 6 GHz chanspec warning in brcmutil.
+
 ## 2026-11-27: battery gauge
 - i2c-gpio on gpm0-0/1: 0x25, 0x36 (FG), 0x57 (PCA9468), 0x66 (MAX77705 top), 0x69 (charger).
 - max17042 driver (compatible max17047), rsns 2000: 70 %, full 4475 mAh, UPower sees it.

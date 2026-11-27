@@ -1,0 +1,187 @@
+From 32085502bb8287083f9b0da89e4ea4b4cbb13b0e Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:33:44 +0100
+Subject: [PATCH 51/53] regulator: s2mps25-acpm: S2MPS26 GPIOs; dts: b0s PCIe
+ Wi-Fi channel
+
+S2MPS26 GPIO outputs (level through the VGPIO block in SYSREG_ALIVE),
+used for WLAN_EN (GPIO 18) by the PCIe node.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts |  25 ++++-
+ drivers/regulator/s2mps25-acpm.c              | 103 ++++++++++++++++++
+ 2 files changed, 127 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index f262c769f..82b79860a 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -299,8 +299,10 @@ ldo11r: ldo11r {
+ 				};
+ 			};
+ 
+-			pmic-sub {
++			s2mps26: pmic-sub {
+ 				compatible = "samsung,s2mps26-pmic";
++				gpio-controller;
++				#gpio-cells = <2>;
+ 
+ 				regulators {
+ 					ldo17s: ldo17s {
+@@ -766,3 +768,24 @@ &xtcxo {
+ &{/psci} {
+ 	method = "hvc";
+ };
++
++/* PCIe channel 0: gen2 x1 to the BCM4389 Wi-Fi (HSI1 power domain, handled by the driver) */
++/ {
++	pcie@113b0000 {
++		compatible = "samsung,exynos2200-pcie";
++		reg = <0x0 0x113b0000 0x0 0x2000>, <0x0 0x113c0000 0x0 0x5000>,
++		      <0x0 0x113e0000 0x0 0x3000>, <0x0 0x113f0000 0x0 0xd000>,
++		      <0x0 0x11221050 0x0 0x10>, <0x0 0x11800000 0x0 0x381000>,
++		      <0x0 0x113d0000 0x0 0x5000>, <0x0 0x28000000 0x0 0x2000>;
++		reg-names = "app", "soc", "phy", "phyudbg", "sysreg", "dbi", "pcs", "config";
++		interrupts = <GIC_SPI 494 IRQ_TYPE_LEVEL_HIGH 0>;
++		#address-cells = <3>;
++		#size-cells = <2>;
++		device_type = "pci";
++		bus-range = <0x00 0xff>;
++		ranges = <0x82000000 0x0 0x20000000 0x0 0x20000000 0x0 0x8000000>;
++		num-lanes = <1>;
++		max-link-speed = <2>;
++		wlan-en-gpios = <&s2mps26 18 GPIO_ACTIVE_HIGH>;
++	};
++};
+diff --git a/drivers/regulator/s2mps25-acpm.c b/drivers/regulator/s2mps25-acpm.c
+index 6863271b1..0402e6988 100644
+--- a/drivers/regulator/s2mps25-acpm.c
++++ b/drivers/regulator/s2mps25-acpm.c
+@@ -13,6 +13,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/io.h>
+ #include <linux/of_irq.h>
++#include <linux/gpio/driver.h>
+ #include <linux/module.h>
+ #include <linux/rtc.h>
+ #include <linux/of.h>
+@@ -372,6 +373,105 @@ static int s2mps_rtc_init(struct device *dev, struct s2mps_acpm *pmic)
+ 	return devm_rtc_register_device(rtc);
+ }
+ 
++
++/*
++ * GPIOs of the sub PMIC (S2MPS26), outputs only so far (WLAN_EN). Pin config at 0x12 + pin in
++ * block 0x0b (bit 6 output enable), level in 0x0e + pin / 8; the AP drives an output's level
++ * through a VGPIO register in SYSREG_ALIVE (4 pins a word: value bit n, enable bit n + 4).
++ * Layout from Samsung's pinctrl-samsung-s2mps26.
++ */
++#define S2MPS_TYPE_GPIO		0x0b
++#define S2MPS_GPIO_STATUS	0x0e
++#define S2MPS_GPIO_SET		0x12
++#define S2MPS_GPIO_OEN		BIT(6)
++#define S2MPS_GPIO_NUM		26
++#define S2MPS_VGPIO_BASE	(0x15820000 + 0x82c)
++
++struct s2mps_gpio {
++	struct gpio_chip gc;
++	struct s2mps_acpm *pmic;
++	void __iomem *vgpio;
++	struct mutex lock;
++};
++
++static int s2mps_gpio_get(struct gpio_chip *gc, unsigned int pin)
++{
++	struct s2mps_gpio *g = gpiochip_get_data(gc);
++	u8 v;
++	int ret = s2mps_pm_rw(g->pmic, S2MPS_TYPE_GPIO, S2MPS_GPIO_STATUS + pin / 8, &v, false);
++
++	return ret ?: !!(v & BIT(pin % 8));
++}
++
++static int s2mps_gpio_set(struct gpio_chip *gc, unsigned int pin, int val)
++{
++	struct s2mps_gpio *g = gpiochip_get_data(gc);
++	void __iomem *r = g->vgpio + (pin / 4) * 4;
++	u32 w;
++
++	mutex_lock(&g->lock);
++	w = readl(r) | BIT(pin % 4 + 4);
++	if (val)
++		w |= BIT(pin % 4);
++	else
++		w &= ~BIT(pin % 4);
++	writel(w, r);
++	mutex_unlock(&g->lock);
++	return 0;
++}
++
++static int s2mps_gpio_direction_output(struct gpio_chip *gc, unsigned int pin, int val)
++{
++	struct s2mps_gpio *g = gpiochip_get_data(gc);
++	u8 v;
++	int ret;
++
++	ret = s2mps_pm_rw(g->pmic, S2MPS_TYPE_GPIO, S2MPS_GPIO_SET + pin, &v, false);
++	if (ret)
++		return ret;
++	v |= S2MPS_GPIO_OEN;
++	ret = s2mps_pm_rw(g->pmic, S2MPS_TYPE_GPIO, S2MPS_GPIO_SET + pin, &v, true);
++	return ret ?: s2mps_gpio_set(gc, pin, val);
++}
++
++static int s2mps_gpio_get_direction(struct gpio_chip *gc, unsigned int pin)
++{
++	struct s2mps_gpio *g = gpiochip_get_data(gc);
++	u8 v;
++	int ret = s2mps_pm_rw(g->pmic, S2MPS_TYPE_GPIO, S2MPS_GPIO_SET + pin, &v, false);
++
++	if (ret)
++		return ret;
++	return v & S2MPS_GPIO_OEN ? GPIO_LINE_DIRECTION_OUT : GPIO_LINE_DIRECTION_IN;
++}
++
++static int s2mps_gpio_init(struct device *dev, struct s2mps_acpm *pmic)
++{
++	struct s2mps_gpio *g;
++
++	if (!of_property_read_bool(dev->of_node, "gpio-controller"))
++		return 0;
++	g = devm_kzalloc(dev, sizeof(*g), GFP_KERNEL);
++	if (!g)
++		return -ENOMEM;
++	g->pmic = pmic;
++	mutex_init(&g->lock);
++	g->vgpio = devm_ioremap(dev, S2MPS_VGPIO_BASE, DIV_ROUND_UP(S2MPS_GPIO_NUM, 4) * 4);
++	if (!g->vgpio)
++		return -ENOMEM;
++	g->gc.label = "s2mps26-gpio";
++	g->gc.parent = dev;
++	g->gc.owner = THIS_MODULE;
++	g->gc.base = -1;
++	g->gc.ngpio = S2MPS_GPIO_NUM;
++	g->gc.can_sleep = true;
++	g->gc.get = s2mps_gpio_get;
++	g->gc.set = s2mps_gpio_set;
++	g->gc.direction_output = s2mps_gpio_direction_output;
++	g->gc.get_direction = s2mps_gpio_get_direction;
++	return devm_gpiochip_add_data(dev, &g->gc, g);
++}
++
+ struct s2mps_acpm_data {
+ 	const struct regulator_desc *descs;
+ 	unsigned int num_descs;
+@@ -408,6 +508,9 @@ static int s2mps_acpm_probe(struct platform_device *pdev)
+ 	ret = s2mps_rtc_init(dev, pmic);
+ 	if (ret)
+ 		dev_warn(dev, "rtc: %d\n", ret);
++	ret = s2mps_gpio_init(dev, pmic);
++	if (ret)
++		dev_warn(dev, "gpio: %d\n", ret);
+ 
+ 	regs_np = of_get_child_by_name(dev->of_node, "regulators");
+ 	if (!regs_np)
+-- 
+2.56.1
+

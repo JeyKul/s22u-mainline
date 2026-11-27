@@ -1,7 +1,7 @@
 From 2a2056aaf99aa44ba19bda838e52793d4200b1bd Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 17:30:39 +0100
-Subject: [PATCH 36/49] soc: samsung: exynos2200-g3d: GPU DVFS governor
+Subject: [PATCH 36/53] soc: samsung: exynos2200-g3d: GPU DVFS governor
 
 Every 2 ms ask the GPU driver whether work is queued on its rings; every
 50 ms step the G3D clock through Samsung's levels (303 MHz up to

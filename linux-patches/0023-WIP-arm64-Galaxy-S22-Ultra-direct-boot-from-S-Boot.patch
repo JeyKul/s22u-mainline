@@ -1,7 +1,7 @@
 From 21ad6b691a4899726eef6637744a8e88dc09075a Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 20:12:54 +0100
-Subject: [PATCH 23/49] WIP: arm64: Galaxy S22 Ultra direct boot from S-Boot
+Subject: [PATCH 23/53] WIP: arm64: Galaxy S22 Ultra direct boot from S-Boot
 
 Stop the watchdog, re-enable the DECON trigger and boot with a DTB built
 into the image (copied out before the MMU is on). Framebuffer progress

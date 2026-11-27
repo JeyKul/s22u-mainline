@@ -5,7 +5,12 @@ Name=usb0
 [Network]
 Address=172.16.42.1/24
 # internet through the PC (tools/share-internet.sh there)
+[Route]
 Gateway=172.16.42.2
+# behind Wi-Fi (NetworkManager uses 600)
+Metric=2000
+
+[Network]
 DNS=1.1.1.1
 DNS=9.9.9.9
 DHCPServer=yes

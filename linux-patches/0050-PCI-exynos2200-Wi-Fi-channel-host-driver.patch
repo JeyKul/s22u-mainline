@@ -1,0 +1,458 @@
+From 6b1c94a3934ac51f6becdd7bbd46dde8db6db4a6 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:33:44 +0100
+Subject: [PATCH 50/53] PCI: exynos2200: Wi-Fi channel host driver
+
+Channel 0 of the Exynos 2200's PCIe (gen2 x1, BCM4389 on the Galaxy S22
+series): HSI1 power domain and TZPC restore, PHY (PMA/PCS) init, PERST#,
+LTSSM through the ELBI glue, MSIs demultiplexed from the glue interrupt.
+Sequences from Samsung's pcie-exynos-rc and S5E9925 cal code. No ASPM.
+dw_handle_msi_irq() exported for the module.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pci/controller/dwc/Kconfig            |   9 +
+ drivers/pci/controller/dwc/Makefile           |   1 +
+ .../pci/controller/dwc/pcie-designware-host.c |   1 +
+ drivers/pci/controller/dwc/pcie-exynos2200.c  | 385 ++++++++++++++++++
+ 4 files changed, 396 insertions(+)
+ create mode 100644 drivers/pci/controller/dwc/pcie-exynos2200.c
+
+diff --git a/drivers/pci/controller/dwc/Kconfig b/drivers/pci/controller/dwc/Kconfig
+index dcfbe7e22..3868d2ceb 100644
+--- a/drivers/pci/controller/dwc/Kconfig
++++ b/drivers/pci/controller/dwc/Kconfig
+@@ -403,6 +403,15 @@ config PCI_EXYNOS
+ 	  hardware and therefore the driver re-uses the DesignWare core
+ 	  functions to implement the driver.
+ 
++config PCIE_EXYNOS2200
++	tristate "Samsung Exynos 2200 PCIe controller (Wi-Fi channel)"
++	depends on ARCH_EXYNOS || COMPILE_TEST
++	depends on PCI_MSI
++	select PCIE_DW_HOST
++	help
++	  Enables channel 0 of the Exynos 2200's PCIe controller, the gen2
++	  x1 link to the Wi-Fi chip on the Galaxy S22 series.
++
+ config PCIE_FU740
+ 	bool "SiFive FU740 PCIe controller"
+ 	depends on PCI_MSI
+diff --git a/drivers/pci/controller/dwc/Makefile b/drivers/pci/controller/dwc/Makefile
+index d4f88cfc6..55d1f202f 100644
+--- a/drivers/pci/controller/dwc/Makefile
++++ b/drivers/pci/controller/dwc/Makefile
+@@ -9,6 +9,7 @@ obj-$(CONFIG_PCIE_ANDES_QILAI) += pcie-andes-qilai.o
+ obj-$(CONFIG_PCIE_ESWIN) += pcie-eswin.o
+ obj-$(CONFIG_PCI_DRA7XX) += pci-dra7xx.o
+ obj-$(CONFIG_PCI_EXYNOS) += pci-exynos.o
++obj-$(CONFIG_PCIE_EXYNOS2200) += pcie-exynos2200.o
+ obj-$(CONFIG_PCIE_FU740) += pcie-fu740.o
+ obj-$(CONFIG_PCI_IMX6) += pci-imx6.o
+ obj-$(CONFIG_PCIE_NXP_S32G) += pcie-nxp-s32g.o
+diff --git a/drivers/pci/controller/dwc/pcie-designware-host.c b/drivers/pci/controller/dwc/pcie-designware-host.c
+index f5a38e6fd..31e156664 100644
+--- a/drivers/pci/controller/dwc/pcie-designware-host.c
++++ b/drivers/pci/controller/dwc/pcie-designware-host.c
+@@ -85,6 +85,7 @@ void dw_handle_msi_irq(struct dw_pcie_rp *pp)
+ 			generic_handle_demux_domain_irq(pp->irq_domain, irq_off + pos);
+ 	}
+ }
++EXPORT_SYMBOL_GPL(dw_handle_msi_irq);
+ 
+ /* Chained MSI interrupt service routine */
+ static void dw_chained_msi_isr(struct irq_desc *desc)
+diff --git a/drivers/pci/controller/dwc/pcie-exynos2200.c b/drivers/pci/controller/dwc/pcie-exynos2200.c
+new file mode 100644
+index 000000000..b9d9a4898
+--- /dev/null
++++ b/drivers/pci/controller/dwc/pcie-exynos2200.c
+@@ -0,0 +1,385 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Exynos 2200 PCIe channel 0 (gen2 x1, the Wi-Fi chip on the Galaxy S22 series).
++ *
++ * DesignWare core with Samsung's glue ("ELBI"), a Samsung PHY (PMA + PCS) and the HSI1 power
++ * domain. The power-on, PHY and link sequences follow Samsung's pcie-exynos-rc.c and
++ * pcie-exynosS5E9925-rc-cal.c (channel 0, chip revision 1, Broadcom endpoint). L1 substates and
++ * the "IA" sequencer that handles them are not used.
++ */
++
++#include <linux/arm-smccc.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/iopoll.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++#include "pcie-designware.h"
++
++/* ELBI */
++#define ELBI_IRQ0		0x000
++#define ELBI_IRQ1		0x004
++#define ELBI_IRQ2		0x008
++#define ELBI_IRQ0_EN		0x010
++#define ELBI_IRQ1_EN		0x014
++#define ELBI_IRQ2_EN		0x018
++#define  IRQ2_MSI		BIT(17)
++#define  IRQ2_CPL_TIMEOUT	BIT(24)
++#define  IRQ1_LINK_DOWN		BIT(10)
++#define ELBI_LTSSM_EN		0x054
++#define ELBI_DEVICE_TYPE	0x080
++#define ELBI_LINK_STATE		0x2c8
++#define  LTSSM_L0		0x11
++#define ELBI_LINKDOWN_RST	0x3a0
++#define ELBI_SOFT_PWR_RST	0x3a4
++#define ELBI_QCH		0x3a8
++#define ELBI_EXIT_L1		0x3bc
++#define ELBI_PEND_NAK		0x474
++#define ELBI_D5C		0xd5c
++#define ELBI_L1_EXIT_OFF	0x1078
++#define ELBI_PMA_RST0		0x1400
++#define ELBI_PMA_RST1		0x1404
++#define ELBI_PMA_RST2		0x1408
++
++/* fixed addresses outside the controller (shared blocks: mapped, not claimed) */
++#define PMU_BASE		0x15860000
++#define  PMU_HSI1_CONF		0x2580
++#define  PMU_HSI1_STATUS	0x2584
++#define  PMU_PHY_CTRL		0x071c		/* bit 0: PHY isolation off */
++#define  PMU_PHY_CTRL1		0x0ab0		/* bit 5: PHY power gating at L1.2 */
++#define  PMU_GPIO_RET		0x3b20		/* bits 15-16: HSI1 GPIO retention release */
++#define CMU_HSI1_BASE		0x11200000
++#define SMC_TZPC_RESTORE	0x82000410	/* (1, TZPC of HSI1, 2), after the domain is on */
++#define TZPC_HSI1		0x11210204
++#define GPF0_BASE		0x11240000	/* pinctrl_hsi1: 0 CLKREQ#, 1 PERST# */
++
++struct exynos2200_pcie {
++	struct dw_pcie pci;
++	void __iomem *elbi, *soc, *phy, *udbg, *pcs, *sysreg;
++	void __iomem *pmu, *cmu, *gpf;
++	struct gpio_desc *wlan_en;
++};
++
++#define to_e22(x)	dev_get_drvdata((x)->dev)
++
++static void rmw(void __iomem *r, u32 clr, u32 set)
++{
++	writel((readl(r) & ~clr) | set, r);
++}
++
++static int e22_power_on(struct exynos2200_pcie *ep)
++{
++	struct arm_smccc_res res;
++	u32 v;
++	int ret;
++
++	if (!(readl(ep->pmu + PMU_HSI1_STATUS) & 1)) {
++		writel(1, ep->pmu + PMU_HSI1_CONF);
++		ret = readl_poll_timeout(ep->pmu + PMU_HSI1_STATUS, v, v & 1, 10, 10000);
++		if (ret)
++			return ret;
++		arm_smccc_smc(SMC_TZPC_RESTORE, 1, TZPC_HSI1, 2, 0, 0, 0, 0, &res);
++	}
++	/* CMU_HSI1 user muxes to the PLL side */
++	writel(0x10, ep->cmu + 0x610);
++	writel(0x10, ep->cmu + 0x620);
++
++	/* gpf0: CLKREQ# function 2 with pull-up, PERST# output low */
++	rmw(ep->gpf + 0x4, BIT(1), 0);
++	rmw(ep->gpf + 0x0, 0xff, 0x12);
++	rmw(ep->gpf + 0x8, 0xf, 0x3);
++
++	rmw(ep->pmu + PMU_PHY_CTRL, 1, 1);
++	rmw(ep->pmu + PMU_GPIO_RET, 0x3 << 15, 0x3 << 15);
++	udelay(100);
++	/* PHY: all power down clear */
++	writel(0x02, ep->phy + 0x580);
++	writel(0x55, ep->phy + 0x928);
++	mdelay(1);
++	writel(0, ep->phy + 0xc);
++	mdelay(1);
++	writel(0, ep->phy + 0x208);
++	writel(0, ep->phy + 0x1044);
++	writel(0, ep->phy + 0x1048);
++	writel(0, ep->phy + 0x104c);
++	writel(0, ep->phy + 0x1050);
++	writel(0, ep->phy + 0x185c);
++	mdelay(1);
++	return 0;
++}
++
++static const u16 pma_tbl0[][2] = {
++	{0x000, 0x88}, {0x01c, 0x66}, {0x1f4, 0x00}, {0x510, 0x81}, {0x514, 0x59}, {0x51c, 0x11},
++	{0x62c, 0x0e}, {0x644, 0x22}, {0x688, 0x03}, {0x6d4, 0x28}, {0x788, 0x64}, {0x78c, 0x64},
++	{0x790, 0x50}, {0x794, 0x50}, {0x944, 0x05}, {0x948, 0x05}, {0x94c, 0x05}, {0x950, 0x05},
++	{0x590, 0x00}, {0x7f8, 0xa0}, {0x730, 0x09}, {0x204, 0x03}, {0x344, 0xc0},
++};
++
++static const u16 pma_tbl1[][2] = {
++	{0x018, 0x01}, {0x514, 0x5b}, {0x608, 0x0c}, {0x60c, 0x0f}, {0x610, 0x0f}, {0x614, 0x0f},
++	{0x618, 0x0f}, {0x510, 0x80}, {0x688, 0x03}, {0x630, 0x04}, {0x6d0, 0x73}, {0x644, 0x23},
++	{0x624, 0x11},
++	/* lane 0 */
++	{0x1140, 0x04}, {0x1144, 0x04}, {0x1148, 0x04}, {0x114c, 0x02}, {0x1150, 0x00},
++	{0x1154, 0x00}, {0x1158, 0x00}, {0x115c, 0x00}, {0x12cc, 0x1c}, {0x12dc, 0x6c},
++	{0x130c, 0x29}, {0x13b4, 0x2f}, {0x1a64, 0x05}, {0x1a68, 0x05}, {0x1a84, 0x05},
++	{0x1a88, 0x05}, {0x1a98, 0x00}, {0x1a9c, 0x00}, {0x1aa8, 0x07}, {0x1ab8, 0x00},
++	{0x1abc, 0x00}, {0x1bb0, 0x03}, {0x1bb4, 0x03}, {0x1bc0, 0x06}, {0x1bc4, 0x06},
++	{0x1be8, 0x01}, {0x1bf8, 0x04}, {0x1c98, 0x00}, {0x1ca4, 0x81}, {0x1444, 0x20},
++	{0x1448, 0x10},
++};
++
++static const u32 pcs_tbl[][2] = {
++	{0x154, 0x000700dd}, {0x190, 0x100b0604}, {0x150, 0x000300d5}, {0x100, 0x16400000},
++	{0x104, 0x08600000}, {0x114, 0x18700000}, {0x178, 0x00000080}, {0x17c, 0x00000018},
++	{0x154, 0x000700d5}, {0x114, 0x18500000}, {0x124, 0x60700000}, {0x174, 0x00000007},
++	{0x178, 0x00000100}, {0x17c, 0x00000700}, {0x158, 0x000640a5}, {0x15c, 0x000640a5},
++	{0x154, 0x000700d5}, {0x110, 0x01600202},
++};
++
++static int e22_phy_init(struct exynos2200_pcie *ep)
++{
++	struct device *dev = ep->pci.dev;
++	u32 v;
++	int i, ret;
++
++	writel(0, ep->phy + 0x1b4);
++	writel(0, ep->phy + 0x208);
++	udelay(10);
++	writel(0x6, ep->soc + 0x4000);		/* ELBI and link clock from PCLK */
++	writel(0x3, ep->phy + 0x32c);		/* PHY input clock un-gating */
++	writel(0x2, ep->udbg + 0xc804);
++	rmw(ep->sysreg, 0x3 << 4, BIT(0));	/* PHY reference clock: TCXO */
++	writel(0x4, ep->elbi + ELBI_DEVICE_TYPE);	/* root complex */
++
++	writel(0xf, ep->elbi + ELBI_SOFT_PWR_RST);
++	writel(0xd, ep->elbi + ELBI_SOFT_PWR_RST);
++	udelay(10);
++	writel(0xf, ep->elbi + ELBI_SOFT_PWR_RST);
++	udelay(10);
++
++	writel(1, ep->elbi + ELBI_PMA_RST1);
++	writel(1, ep->elbi + ELBI_PMA_RST2);
++	writel(1, ep->elbi + ELBI_PMA_RST0);
++	writel(0, ep->elbi + ELBI_PMA_RST1);
++	writel(0, ep->elbi + ELBI_PMA_RST2);
++	writel(0, ep->elbi + ELBI_PMA_RST0);
++
++	for (i = 0; i < ARRAY_SIZE(pma_tbl0); i++)
++		writel(pma_tbl0[i][1], ep->phy + pma_tbl0[i][0]);
++	rmw(ep->phy + 0x40, 0x7 << 1, 0);
++	rmw(ep->phy + 0x40, 0, BIT(2));
++	rmw(ep->phy + 0x2d4, BIT(1), 0);
++	rmw(ep->phy + 0x2d4, 0, BIT(1));
++	rmw(ep->phy + 0x358, 0xff, 0x10);
++	for (i = 0; i < ARRAY_SIZE(pma_tbl1); i++)
++		writel(pma_tbl1[i][1], ep->phy + pma_tbl1[i][0]);
++	/* Broadcom endpoint */
++	rmw(ep->phy + 0x1b20, 0x7, 0x2);
++	rmw(ep->phy + 0x1340, 0x7, 0x3);
++	writel(0x3c, ep->phy + 0x2c);
++	writel(0x2, ep->phy + 0x580);
++	for (i = 0; i < ARRAY_SIZE(pcs_tbl); i++)
++		writel(pcs_tbl[i][1], ep->pcs + pcs_tbl[i][0]);
++
++	writel(1, ep->elbi + ELBI_PMA_RST1);
++	udelay(10);
++	writel(1, ep->elbi + ELBI_PMA_RST2);
++	writel(1, ep->elbi + ELBI_PMA_RST0);
++
++	ret = readl_poll_timeout(ep->phy + 0xa80, v, v & BIT(0), 15, 15000);
++	ret = ret ?: readl_poll_timeout(ep->phy + 0x15c0, v, v & BIT(4), 15, 15000);
++	if (ret)
++		dev_warn(dev, "PHY PLL/CDR lock failed\n");
++	if (readl_poll_timeout(ep->phy + 0x140c, v, v & BIT(7), 10, 10000))
++		dev_warn(dev, "PHY offset calibration failed\n");
++
++	writel(0x220, ep->udbg + 0xc804);
++	rmw(ep->udbg + 0xc800, 0, BIT(8));
++	rmw(ep->udbg + 0xc80c, 0xffff << 16, 0x18 << 16);
++	rmw(ep->udbg + 0xc800, BIT(6) | BIT(5), 0);
++	writel(0, ep->phy + 0x32c);
++	writel(1, ep->elbi + ELBI_L1_EXIT_OFF);
++	return 0;
++}
++
++/*
++ * No ASPM: the link would sit in L1 and, without Samsung's L1 exit handling (the IA sequencer),
++ * config and memory reads then return all ones.
++ */
++static void e22_no_aspm(struct dw_pcie *pci)
++{
++	u8 cap = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
++	u32 v;
++
++	dw_pcie_dbi_ro_wr_en(pci);
++	v = dw_pcie_readl_dbi(pci, cap + PCI_EXP_LNKCAP);
++	dw_pcie_writel_dbi(pci, cap + PCI_EXP_LNKCAP, v & ~PCI_EXP_LNKCAP_ASPMS);
++	dw_pcie_dbi_ro_wr_dis(pci);
++}
++
++static int e22_host_init(struct dw_pcie_rp *pp)
++{
++	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
++	struct exynos2200_pcie *ep = to_e22(pci);
++	int ret;
++
++	if (ep->wlan_en) {
++		gpiod_set_value_cansleep(ep->wlan_en, 1);
++		msleep(50);
++	}
++	ret = e22_power_on(ep);
++	if (ret)
++		return ret;
++	e22_phy_init(ep);
++
++	writel(0, ep->elbi + ELBI_QCH);
++	writel(2, ep->elbi + ELBI_D5C);
++	rmw(ep->pmu + PMU_PHY_CTRL1, BIT(5), 0);
++	rmw(ep->pmu + PMU_PHY_CTRL1, BIT(5), BIT(5));
++
++	rmw(ep->gpf + 0x4, 0, BIT(1));		/* PERST# high */
++	msleep(21);
++	rmw(ep->elbi + ELBI_EXIT_L1, 0, 0x11);
++	writel(BIT(1), ep->elbi + ELBI_LINKDOWN_RST);	/* manual reset on link down */
++	writel(1, ep->elbi + ELBI_PEND_NAK);
++
++	/* clear and enable the glue interrupts: link down, completion timeout, MSI */
++	writel(~0, ep->elbi + ELBI_IRQ0);
++	writel(~0, ep->elbi + ELBI_IRQ1);
++	writel(~0, ep->elbi + ELBI_IRQ2);
++	writel(0, ep->elbi + ELBI_IRQ0_EN);
++	writel(IRQ1_LINK_DOWN, ep->elbi + ELBI_IRQ1_EN);
++	writel(IRQ2_MSI | IRQ2_CPL_TIMEOUT, ep->elbi + ELBI_IRQ2_EN);
++	e22_no_aspm(pci);
++	return 0;
++}
++
++static const struct dw_pcie_host_ops e22_host_ops = {
++	.init = e22_host_init,
++};
++
++static int e22_start_link(struct dw_pcie *pci)
++{
++	struct exynos2200_pcie *ep = to_e22(pci);
++
++	writel(1, ep->elbi + ELBI_LTSSM_EN);
++	return 0;
++}
++
++static void e22_stop_link(struct dw_pcie *pci)
++{
++	struct exynos2200_pcie *ep = to_e22(pci);
++
++	writel(0, ep->elbi + ELBI_LTSSM_EN);
++}
++
++static bool e22_link_up(struct dw_pcie *pci)
++{
++	struct exynos2200_pcie *ep = to_e22(pci);
++
++	return (readl(ep->elbi + ELBI_LINK_STATE) & 0x3f) == LTSSM_L0;
++}
++
++static const struct dw_pcie_ops e22_ops = {
++	.start_link = e22_start_link,
++	.stop_link = e22_stop_link,
++	.link_up = e22_link_up,
++};
++
++static irqreturn_t e22_irq(int irq, void *data)
++{
++	struct exynos2200_pcie *ep = data;
++	u32 i0, i1, i2;
++
++	i0 = readl(ep->elbi + ELBI_IRQ0);
++	writel(i0, ep->elbi + ELBI_IRQ0);
++	i1 = readl(ep->elbi + ELBI_IRQ1);
++	writel(i1, ep->elbi + ELBI_IRQ1);
++	i2 = readl(ep->elbi + ELBI_IRQ2);
++	writel(i2, ep->elbi + ELBI_IRQ2);
++
++	if (i1 & IRQ1_LINK_DOWN)
++		dev_err_ratelimited(ep->pci.dev, "link down\n");
++	if (i2 & IRQ2_CPL_TIMEOUT)
++		dev_err_ratelimited(ep->pci.dev, "completion timeout\n");
++	if (i2 & IRQ2_MSI)
++		dw_handle_msi_irq(&ep->pci.pp);
++	return IRQ_HANDLED;
++}
++
++static void __iomem *e22_map(struct platform_device *pdev, const char *name)
++{
++	return devm_platform_ioremap_resource_byname(pdev, name);
++}
++
++static int exynos2200_pcie_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct exynos2200_pcie *ep;
++	int irq, ret;
++
++	ep = devm_kzalloc(dev, sizeof(*ep), GFP_KERNEL);
++	if (!ep)
++		return -ENOMEM;
++	ep->pci.dev = dev;
++	ep->pci.ops = &e22_ops;
++	ep->pci.pp.ops = &e22_host_ops;
++	/* MSIs arrive through the glue interrupt, demultiplexed in e22_irq() */
++	ep->pci.pp.msi_irq[0] = -ENODEV;
++	platform_set_drvdata(pdev, ep);
++
++	ep->elbi = e22_map(pdev, "app");	/* ELBI; the DWC core claims an "elbi" of its own */
++	ep->soc = e22_map(pdev, "soc");
++	ep->phy = e22_map(pdev, "phy");
++	ep->udbg = e22_map(pdev, "phyudbg");
++	ep->pcs = e22_map(pdev, "pcs");
++	ep->sysreg = e22_map(pdev, "sysreg");
++	if (IS_ERR(ep->elbi) || IS_ERR(ep->soc) || IS_ERR(ep->phy) || IS_ERR(ep->udbg) ||
++	    IS_ERR(ep->pcs) || IS_ERR(ep->sysreg))
++		return -ENOMEM;
++	ep->pmu = devm_ioremap(dev, PMU_BASE, 0x4000);
++	ep->cmu = devm_ioremap(dev, CMU_HSI1_BASE, 0x1000);
++	ep->gpf = devm_ioremap(dev, GPF0_BASE, 0x20);
++	if (!ep->pmu || !ep->cmu || !ep->gpf)
++		return -ENOMEM;
++
++	ep->wlan_en = devm_gpiod_get_optional(dev, "wlan-en", GPIOD_OUT_LOW);
++	if (IS_ERR(ep->wlan_en))
++		return dev_err_probe(dev, PTR_ERR(ep->wlan_en), "wlan-en\n");
++
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0)
++		return irq;
++	ret = devm_request_irq(dev, irq, e22_irq, IRQF_NO_AUTOEN, "exynos2200-pcie", ep);
++	if (ret)
++		return ret;
++
++	ret = dw_pcie_host_init(&ep->pci.pp);
++	if (ret)
++		return ret;
++	enable_irq(irq);
++	return 0;
++}
++
++static const struct of_device_id exynos2200_pcie_of_match[] = {
++	{ .compatible = "samsung,exynos2200-pcie" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, exynos2200_pcie_of_match);
++
++static struct platform_driver exynos2200_pcie_driver = {
++	.probe = exynos2200_pcie_probe,
++	.driver = {
++		.name = "exynos2200-pcie",
++		.of_match_table = exynos2200_pcie_of_match,
++		.suppress_bind_attrs = true,
++	},
++};
++module_platform_driver(exynos2200_pcie_driver);
++MODULE_DESCRIPTION("Samsung Exynos 2200 PCIe controller");
++MODULE_LICENSE("GPL");
+-- 
+2.56.1
+

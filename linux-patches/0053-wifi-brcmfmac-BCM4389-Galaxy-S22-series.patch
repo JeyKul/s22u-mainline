@@ -1,0 +1,610 @@
+From ac8739de016406c9b0274d3d9df6a05b7f62ed8c Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 20:17:04 +0100
+Subject: [PATCH 53/53] wifi: brcmfmac: BCM4389 (Galaxy S22 series)
+
+PCIe 14e4:4441, firmware brcmfmac4389c1-pcie (Samsung's bcmdhd_sta.bin,
+nvram.txt, bcmdhd_clm.blob). What it needed, mostly following
+Broadcom's DHD:
+- CA7 + SYSMEM: RAM base 0x200000; SYSMEM bank counts in DHD's layout
+  (rev 9: 21 RAM banks after 8 ROM banks = 2.6 MB); in download state
+  reset SYSMEM and leave the 802.11 cores alone; CA7 before CR4.
+- RAM larger than the 4 MB BAR1 window: move the window (config 0x84)
+  for every TCM access.
+- multi-backplane: request the ARM/backplane power domain (DAR
+  powerctl) before starting the firmware; the backplane is briefly
+  unreachable while it boots (all ones): keep polling.
+- 1535 rx buffers asked for: 2048 rx packet ids.
+- random seed before NVRAM; deep sleep requests NAKed (no device-wake).
+- join: the versioned wl_extjoin_params_v1 layout.
+- firmware asserts sometimes without a FWHALT message: check the trap
+  flag on each doorbell and reset the bus.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../broadcom/brcm80211/brcmfmac/cfg80211.c    |  28 ++-
+ .../broadcom/brcm80211/brcmfmac/chip.c        |  43 +++-
+ .../broadcom/brcm80211/brcmfmac/msgbuf.c      |   2 +-
+ .../broadcom/brcm80211/brcmfmac/pcie.c        | 206 ++++++++++++------
+ .../broadcom/brcm80211/include/brcm_hw_ids.h  |   2 +
+ 5 files changed, 199 insertions(+), 82 deletions(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
+index 872c48806..c6e9d4901 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/cfg80211.c
+@@ -2587,8 +2587,32 @@ brcmf_cfg80211_connect(struct wiphy *wiphy, struct net_device *ndev,
+ 
+ 	brcmf_set_join_pref(ifp, &sme->bss_select);
+ 
+-	err  = brcmf_fil_bsscfg_data_set(ifp, "join", ext_join_params,
+-					 join_params_size);
++	if (ifp->drvr->bus_if->chip == BRCM_CC_4389_CHIP_ID) {
++		/*
++		 * Newer firmware (BCM4389) takes only the versioned layout
++		 * (wl_extjoin_params_v1): a version word in front, and an assoc
++		 * part with its own version, flags and a BSSID count.
++		 */
++		struct brcmf_assoc_params_le *a = &ext_join_params->assoc_le;
++		u8 v1[80] = {};
++
++		v1[0] = 1;					/* version */
++		memcpy(&v1[4], &ext_join_params->ssid_le, 36);
++		v1[40] = ext_join_params->scan_le.scan_type;
++		memcpy(&v1[44], &ext_join_params->scan_le.nprobes, 4);
++		memcpy(&v1[48], &ext_join_params->scan_le.active_time, 4);
++		memcpy(&v1[52], &ext_join_params->scan_le.passive_time, 4);
++		memcpy(&v1[56], &ext_join_params->scan_le.home_time, 4);
++		v1[60] = 1;					/* assoc version */
++		memcpy(&v1[64], a->bssid, ETH_ALEN);
++		memcpy(&v1[72], &a->chanspec_num, 4);
++		memcpy(&v1[76], &a->chanspec_list[0], 2);
++		err = brcmf_fil_bsscfg_data_set(ifp, "join", v1,
++						cfg->channel ? 78 : 76);
++	} else {
++		err = brcmf_fil_bsscfg_data_set(ifp, "join", ext_join_params,
++						join_params_size);
++	}
+ 	kfree(ext_join_params);
+ 	if (!err)
+ 		/* This is it. join command worked, we are done */
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c
+index 4adc0d0e4..0754ec5e7 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c
+@@ -659,17 +659,27 @@ static u32 brcmf_chip_sysmem_ramsize(struct brcmf_core_priv *sysmem)
+ 	u32 memsize = 0;
+ 	u32 coreinfo;
+ 	u32 idx;
+-	u32 nb;
++	u32 nb, nrb;
+ 	u32 banksize;
+ 
+ 	if (!brcmf_chip_iscoreup(&sysmem->pub))
+ 		brcmf_chip_resetcore(&sysmem->pub, 0, 0, 0);
+ 
+ 	coreinfo = brcmf_chip_core_read32(sysmem, SYSMEMREGOFFS(coreinfo));
+-	nb = (coreinfo & SRCI_SRNB_MASK) >> SRCI_SRNB_SHIFT;
++	/*
++	 * SYSMEM's coreinfo is not SOCRAM's: 5-bit RAM and ROM bank counts (8-bit from rev 12),
++	 * and the RAM banks follow the ROM banks (Broadcom's si_sysmem_size()).
++	 */
++	if (sysmem->pub.rev < 12) {
++		nrb = (coreinfo & 0x3e0) >> 5;
++		nb = coreinfo & 0x1f;
++	} else {
++		nrb = (coreinfo >> 24) & 0xff;
++		nb = (coreinfo >> 16) & 0xff;
++	}
+ 
+ 	for (idx = 0; idx < nb; idx++) {
+-		brcmf_chip_socram_banksize(sysmem, idx, &banksize);
++		brcmf_chip_socram_banksize(sysmem, idx + nrb, &banksize);
+ 		memsize += banksize;
+ 	}
+ 
+@@ -746,6 +756,8 @@ static u32 brcmf_chip_tcm_rambase(struct brcmf_chip_priv *ci)
+ 		return 0x352000;
+ 	case BRCM_CC_4387_CHIP_ID:
+ 		return 0x740000;
++	case BRCM_CC_4389_CHIP_ID:
++		return 0x200000;
+ 	default:
+ 		brcmf_err("unknown chip: %s\n", ci->pub.name);
+ 		break;
+@@ -760,7 +772,8 @@ int brcmf_chip_get_raminfo(struct brcmf_chip *pub)
+ 	struct brcmf_core_priv *mem_core;
+ 	struct brcmf_core *mem;
+ 
+-	mem = brcmf_chip_get_core(&ci->pub, BCMA_CORE_ARM_CR4);
++	mem = brcmf_chip_get_core(&ci->pub, BCMA_CORE_ARM_CA7) ? NULL :
++	      brcmf_chip_get_core(&ci->pub, BCMA_CORE_ARM_CR4);
+ 	if (mem) {
+ 		mem_core = container_of(mem, struct brcmf_core_priv, pub);
+ 		ci->pub.ramsize = brcmf_chip_tcm_ramsize(mem_core);
+@@ -1356,6 +1369,13 @@ brcmf_chip_ca7_set_passive(struct brcmf_chip_priv *chip)
+ 
+ 	brcmf_chip_disable_arm(chip, BCMA_CORE_ARM_CA7);
+ 
++	/* with SYSMEM (BCM4389) DHD resets the memory and leaves the 802.11 cores alone */
++	core = brcmf_chip_get_core(&chip->pub, BCMA_CORE_SYS_MEM);
++	if (core) {
++		brcmf_chip_resetcore(core, 0, 0, 0);
++		return;
++	}
++
+ 	core = brcmf_chip_get_core(&chip->pub, BCMA_CORE_80211);
+ 	brcmf_chip_resetcore(core, D11_BCMA_IOCTL_PHYRESET |
+ 				   D11_BCMA_IOCTL_PHYCLOCKEN,
+@@ -1384,14 +1404,15 @@ void brcmf_chip_set_passive(struct brcmf_chip *pub)
+ 	brcmf_dbg(TRACE, "Enter\n");
+ 
+ 	chip = container_of(pub, struct brcmf_chip_priv, pub);
+-	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CR4);
++	/* CA7 first: chips with both (BCM4389) run their firmware on the CA7, as in DHD */
++	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CA7);
+ 	if (arm) {
+-		brcmf_chip_cr4_set_passive(chip);
++		brcmf_chip_ca7_set_passive(chip);
+ 		return;
+ 	}
+-	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CA7);
++	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CR4);
+ 	if (arm) {
+-		brcmf_chip_ca7_set_passive(chip);
++		brcmf_chip_cr4_set_passive(chip);
+ 		return;
+ 	}
+ 	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CM3);
+@@ -1409,12 +1430,12 @@ bool brcmf_chip_set_active(struct brcmf_chip *pub, u32 rstvec)
+ 	brcmf_dbg(TRACE, "Enter\n");
+ 
+ 	chip = container_of(pub, struct brcmf_chip_priv, pub);
+-	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CR4);
+-	if (arm)
+-		return brcmf_chip_cr4_set_active(chip, rstvec);
+ 	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CA7);
+ 	if (arm)
+ 		return brcmf_chip_ca7_set_active(chip, rstvec);
++	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CR4);
++	if (arm)
++		return brcmf_chip_cr4_set_active(chip, rstvec);
+ 	arm = brcmf_chip_get_core(pub, BCMA_CORE_ARM_CM3);
+ 	if (arm)
+ 		return brcmf_chip_cm3_set_active(chip);
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/msgbuf.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/msgbuf.c
+index 069ba7016..5c883b76e 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/msgbuf.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/msgbuf.c
+@@ -49,7 +49,7 @@
+ #define MSGBUF_TYPE_LPBK_DMAXFER_CMPLT		0x14
+ 
+ #define NR_TX_PKTIDS				2048
+-#define NR_RX_PKTIDS				1024
++#define NR_RX_PKTIDS				2048	/* BCM4389 asks for 1535 rx buffers */
+ 
+ #define BRCMF_IOCTL_REQ_PKTID			0xFFFE
+ 
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+index 55f4d7b97..5b24816d0 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -71,6 +71,7 @@ BRCMF_FW_CLM_DEF(4377B3, "brcmfmac4377b3-pcie");
+ BRCMF_FW_CLM_DEF(4378B1, "brcmfmac4378b1-pcie");
+ BRCMF_FW_CLM_DEF(4378B3, "brcmfmac4378b3-pcie");
+ BRCMF_FW_CLM_DEF(4387C2, "brcmfmac4387c2-pcie");
++BRCMF_FW_CLM_DEF(4389C1, "brcmfmac4389c1-pcie");
+ BRCMF_FW_CLM_DEF(54591, "brcmfmac54591-pcie");
+ 
+ /* firmware config files */
+@@ -112,6 +113,7 @@ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ 	BRCMF_FW_ENTRY(BRCM_CC_4378_CHIP_ID, 0x0000000F, 4378B1), /* revision ID 3 */
+ 	BRCMF_FW_ENTRY(BRCM_CC_4378_CHIP_ID, 0xFFFFFFE0, 4378B3), /* revision ID 5 */
+ 	BRCMF_FW_ENTRY(BRCM_CC_4387_CHIP_ID, 0xFFFFFFFF, 4387C2), /* revision ID 7 */
++	BRCMF_FW_ENTRY(BRCM_CC_4389_CHIP_ID, 0xFFFFFFFF, 4389C1),
+ };
+ 
+ #define BRCMF_PCIE_FW_UP_TIMEOUT		5000 /* msec */
+@@ -120,6 +122,7 @@ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ 
+ /* backplane addres space accessed by BAR0 */
+ #define	BRCMF_PCIE_BAR0_WINDOW			0x80
++#define	BRCMF_PCIE_BAR1_WINDOW			0x84
+ #define BRCMF_PCIE_BAR0_REG_SIZE		0x1000
+ #define	BRCMF_PCIE_BAR0_WRAPPERBASE		0x70
+ 
+@@ -220,6 +223,7 @@ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ #define BRCMF_PCIE_SHARED_DMA_INDEX		0x10000
+ #define BRCMF_PCIE_SHARED_DMA_2B_IDX		0x100000
+ #define BRCMF_PCIE_SHARED_HOSTRDY_DB1		0x10000000
++#define BRCMF_PCIE_SHARED_TRAP			0x00000400
+ 
+ #define BRCMF_PCIE_FLAGS_HTOD_SPLIT		0x4000
+ #define BRCMF_PCIE_FLAGS_DTOH_SPLIT		0x8000
+@@ -263,6 +267,7 @@ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ 
+ #define BRCMF_H2D_HOST_D3_INFORM		0x00000001
+ #define BRCMF_H2D_HOST_DS_ACK			0x00000002
++#define BRCMF_H2D_HOST_DS_NAK			0x00000004
+ #define BRCMF_H2D_HOST_D0_INFORM_IN_USE		0x00000008
+ #define BRCMF_H2D_HOST_D0_INFORM		0x00000010
+ 
+@@ -339,6 +344,9 @@ struct brcmf_pciedev_info {
+ 	const struct brcmf_pcie_reginfo *reginfo;
+ 	void __iomem *regs;
+ 	void __iomem *tcm;
++	u32 tcm_size;		/* BAR1: a window into the backplane at tcm_win */
++	u32 tcm_win;
++	spinlock_t tcm_lock;
+ 	u32 ram_base;
+ 	u32 ram_size;
+ 	struct brcmf_chip *ci;
+@@ -494,21 +502,86 @@ brcmf_pcie_write_reg32(struct brcmf_pciedev_info *devinfo, u32 reg_offset,
+ }
+ 
+ 
++/*
++ * BAR1 shows tcm_size bytes of the backplane, starting at the window in config register 0x84.
++ * Chips whose RAM does not fit one window (BCM4389: RAM at 0x200000, more than 2 MB of it) need
++ * the window moved, as Broadcom's DHD does. Callers hold tcm_lock.
++ */
++static void __iomem *
++brcmf_pcie_tcm(struct brcmf_pciedev_info *devinfo, u32 addr, u32 *avail)
++{
++	u32 win = addr & ~(devinfo->tcm_size - 1);
++
++	if (win != devinfo->tcm_win) {
++		pci_write_config_dword(devinfo->pdev, BRCMF_PCIE_BAR1_WINDOW, win);
++		devinfo->tcm_win = win;
++	}
++	if (avail)
++		*avail = devinfo->tcm_size - (addr - win);
++	return devinfo->tcm + (addr - win);
++}
++
++#define BRCMF_PCIE_TCM_ACCESS(devinfo, addr, expr) ({			\
++	unsigned long __flags;						\
++	void __iomem *address;						\
++	typeof(expr) __v;						\
++									\
++	spin_lock_irqsave(&(devinfo)->tcm_lock, __flags);		\
++	address = brcmf_pcie_tcm(devinfo, addr, NULL);			\
++	__v = (expr);							\
++	spin_unlock_irqrestore(&(devinfo)->tcm_lock, __flags);		\
++	__v;								\
++})
++
++static void
++brcmf_pcie_tcm_toio(struct brcmf_pciedev_info *devinfo, u32 addr, const void *src, u32 len)
++{
++	unsigned long flags;
++	u32 n;
++
++	while (len) {
++		spin_lock_irqsave(&devinfo->tcm_lock, flags);
++		void __iomem *dst = brcmf_pcie_tcm(devinfo, addr, &n);
++
++		n = min(n, len);
++		memcpy_toio(dst, src, n);
++		spin_unlock_irqrestore(&devinfo->tcm_lock, flags);
++		addr += n;
++		src += n;
++		len -= n;
++	}
++}
++
++static void
++brcmf_pcie_tcm_fromio(struct brcmf_pciedev_info *devinfo, void *dst, u32 addr, u32 len)
++{
++	unsigned long flags;
++	u32 n;
++
++	while (len) {
++		spin_lock_irqsave(&devinfo->tcm_lock, flags);
++		void __iomem *src = brcmf_pcie_tcm(devinfo, addr, &n);
++
++		n = min(n, len);
++		memcpy_fromio(dst, src, n);
++		spin_unlock_irqrestore(&devinfo->tcm_lock, flags);
++		addr += n;
++		dst += n;
++		len -= n;
++	}
++}
++
+ static u8
+ brcmf_pcie_read_tcm8(struct brcmf_pciedev_info *devinfo, u32 mem_offset)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-
+-	return (ioread8(address));
++	return BRCMF_PCIE_TCM_ACCESS(devinfo, mem_offset, ioread8(address));
+ }
+ 
+ 
+ static u16
+ brcmf_pcie_read_tcm16(struct brcmf_pciedev_info *devinfo, u32 mem_offset)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-
+-	return (ioread16(address));
++	return BRCMF_PCIE_TCM_ACCESS(devinfo, mem_offset, ioread16(address));
+ }
+ 
+ 
+@@ -516,9 +589,7 @@ static void
+ brcmf_pcie_write_tcm16(struct brcmf_pciedev_info *devinfo, u32 mem_offset,
+ 		       u16 value)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-
+-	iowrite16(value, address);
++	BRCMF_PCIE_TCM_ACCESS(devinfo, mem_offset, (iowrite16(value, address), 0));
+ }
+ 
+ 
+@@ -544,9 +615,7 @@ brcmf_pcie_write_idx(struct brcmf_pciedev_info *devinfo, u32 mem_offset,
+ static u32
+ brcmf_pcie_read_tcm32(struct brcmf_pciedev_info *devinfo, u32 mem_offset)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-
+-	return (ioread32(address));
++	return BRCMF_PCIE_TCM_ACCESS(devinfo, mem_offset, ioread32(address));
+ }
+ 
+ 
+@@ -554,18 +623,14 @@ static void
+ brcmf_pcie_write_tcm32(struct brcmf_pciedev_info *devinfo, u32 mem_offset,
+ 		       u32 value)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-
+-	iowrite32(value, address);
++	BRCMF_PCIE_TCM_ACCESS(devinfo, mem_offset, (iowrite32(value, address), 0));
+ }
+ 
+ 
+ static u32
+ brcmf_pcie_read_ram32(struct brcmf_pciedev_info *devinfo, u32 mem_offset)
+ {
+-	void __iomem *addr = devinfo->tcm + devinfo->ci->rambase + mem_offset;
+-
+-	return (ioread32(addr));
++	return brcmf_pcie_read_tcm32(devinfo, devinfo->ci->rambase + mem_offset);
+ }
+ 
+ 
+@@ -573,9 +638,7 @@ static void
+ brcmf_pcie_write_ram32(struct brcmf_pciedev_info *devinfo, u32 mem_offset,
+ 		       u32 value)
+ {
+-	void __iomem *addr = devinfo->tcm + devinfo->ci->rambase + mem_offset;
+-
+-	iowrite32(value, addr);
++	brcmf_pcie_write_tcm32(devinfo, devinfo->ci->rambase + mem_offset, value);
+ }
+ 
+ 
+@@ -583,40 +646,7 @@ static void
+ brcmf_pcie_copy_dev_tomem(struct brcmf_pciedev_info *devinfo, u32 mem_offset,
+ 			  void *dstaddr, u32 len)
+ {
+-	void __iomem *address = devinfo->tcm + mem_offset;
+-	__le32 *dst32;
+-	__le16 *dst16;
+-	u8 *dst8;
+-
+-	if (((ulong)address & 4) || ((ulong)dstaddr & 4) || (len & 4)) {
+-		if (((ulong)address & 2) || ((ulong)dstaddr & 2) || (len & 2)) {
+-			dst8 = (u8 *)dstaddr;
+-			while (len) {
+-				*dst8 = ioread8(address);
+-				address++;
+-				dst8++;
+-				len--;
+-			}
+-		} else {
+-			len = len / 2;
+-			dst16 = (__le16 *)dstaddr;
+-			while (len) {
+-				*dst16 = cpu_to_le16(ioread16(address));
+-				address += 2;
+-				dst16++;
+-				len--;
+-			}
+-		}
+-	} else {
+-		len = len / 4;
+-		dst32 = (__le32 *)dstaddr;
+-		while (len) {
+-			*dst32 = cpu_to_le32(ioread32(address));
+-			address += 4;
+-			dst32++;
+-			len--;
+-		}
+-	}
++	brcmf_pcie_tcm_fromio(devinfo, dstaddr, mem_offset, len);
+ }
+ 
+ 
+@@ -753,6 +783,23 @@ static int brcmf_pcie_exit_download_state(struct brcmf_pciedev_info *devinfo,
+ 		brcmf_chip_resetcore(core, 0, 0, 0);
+ 	}
+ 
++	if (devinfo->ci->chip == BRCM_CC_4389_CHIP_ID) {
++		/*
++		 * Multi-backplane chip: keep the ARM/backplane power domain requested (DAR
++		 * powerctl, PowerOnRequest bit 1), as Broadcom's DHD does, or the backplane goes
++		 * away under the host once the firmware runs.
++		 */
++		u32 v = ioread32(devinfo->regs + 0x2000 + 0x1e8);
++		int i;
++
++		iowrite32(v | BIT(1 + 8), devinfo->regs + 0x2000 + 0x1e8);
++		for (i = 0; i < 100; i++) {
++			v = ioread32(devinfo->regs + 0x2000 + 0x1e8);
++			if (v & BIT(1 + 16))
++				break;
++			udelay(10);
++		}
++		}
+ 	if (!brcmf_chip_set_active(devinfo->ci, resetintr))
+ 		return -EIO;
+ 	return 0;
+@@ -815,7 +862,14 @@ static void brcmf_pcie_handle_mb_data(struct brcmf_pciedev_info *devinfo)
+ 	brcmf_dbg(PCIE, "D2H_MB_DATA: 0x%04x\n", dtoh_mb_data);
+ 	if (dtoh_mb_data & BRCMF_D2H_DEV_DS_ENTER_REQ)  {
+ 		brcmf_dbg(PCIE, "D2H_MB_DATA: DEEP SLEEP REQ\n");
+-		brcmf_pcie_send_mb_data(devinfo, BRCMF_H2D_HOST_DS_ACK);
++		/*
++		 * BCM4389 firmware leaves deep sleep only on a device-wake signal (GPIO or
++		 * in-band) that is not implemented here: keep it out of deep sleep.
++		 */
++		if (devinfo->ci->chip == BRCM_CC_4389_CHIP_ID)
++			brcmf_pcie_send_mb_data(devinfo, BRCMF_H2D_HOST_DS_NAK);
++		else
++			brcmf_pcie_send_mb_data(devinfo, BRCMF_H2D_HOST_DS_ACK);
+ 		brcmf_dbg(PCIE, "D2H_MB_DATA: sent DEEP SLEEP ACK\n");
+ 	}
+ 	if (dtoh_mb_data & BRCMF_D2H_DEV_DS_EXIT_NOTE)
+@@ -957,7 +1011,17 @@ static irqreturn_t brcmf_pcie_isr_thread(int irq, void *arg)
+ 							&devinfo->pdev->dev);
+ 		}
+ 	}
+-	brcmf_pcie_bus_console_read(devinfo, false);
++	/*
++	 * BCM4389 firmware asserts now and then without telling the host (no FWHALT mailbox
++	 * message): notice the trap flag before waiting on a response, and let the bus reset
++	 * reload the firmware.
++	 */
++	if (devinfo->ci->chip == BRCM_CC_4389_CHIP_ID && devinfo->shared.tcm_base_address &&
++	    (brcmf_pcie_read_tcm32(devinfo, devinfo->shared.tcm_base_address) &
++	     BRCMF_PCIE_SHARED_TRAP)) {
++		brcmf_fw_crashed(&devinfo->pdev->dev);
++		return -EIO;
++	}
+ 	if (devinfo->state == BRCMFMAC_PCIE_STATE_UP)
+ 		brcmf_pcie_intr_enable(devinfo);
+ 	devinfo->in_irq = false;
+@@ -1062,6 +1126,7 @@ static int brcmf_pcie_ring_mb_ring_bell(void *ctx)
+ 		return -EIO;
+ 
+ 	brcmf_dbg(PCIE, "RING !\n");
++	brcmf_pcie_bus_console_read(devinfo, false);
+ 	/* Any arbitrary value will do, lets use 1 */
+ 	brcmf_pcie_write_reg32(devinfo, devinfo->reginfo->h2d_mailbox_0, 1);
+ 
+@@ -1234,8 +1299,8 @@ static int brcmf_pcie_init_ringbuffers(struct brcmf_pciedev_info *devinfo)
+ 	u16 max_submissionrings;
+ 	u16 max_completionrings;
+ 
+-	memcpy_fromio(&ringinfo, devinfo->tcm + devinfo->shared.ring_info_addr,
+-		      sizeof(ringinfo));
++	brcmf_pcie_tcm_fromio(devinfo, &ringinfo, devinfo->shared.ring_info_addr,
++			      sizeof(ringinfo));
+ 	if (devinfo->shared.version >= 6) {
+ 		max_submissionrings = le16_to_cpu(ringinfo.max_submissionrings);
+ 		max_flowrings = le16_to_cpu(ringinfo.max_flowrings);
+@@ -1308,8 +1373,8 @@ static int brcmf_pcie_init_ringbuffers(struct brcmf_pciedev_info *devinfo)
+ 		ringinfo.d2h_r_idx_hostaddr.high_addr =
+ 			cpu_to_le32(address >> 32);
+ 
+-		memcpy_toio(devinfo->tcm + devinfo->shared.ring_info_addr,
+-			    &ringinfo, sizeof(ringinfo));
++		brcmf_pcie_tcm_toio(devinfo, devinfo->shared.ring_info_addr,
++				    &ringinfo, sizeof(ringinfo));
+ 		brcmf_dbg(PCIE, "Using host memory indices\n");
+ 	}
+ 
+@@ -1687,7 +1752,7 @@ brcmf_pcie_provide_random_bytes(struct brcmf_pciedev_info *devinfo, u32 address)
+ 	u8 randbuf[BRCMF_RANDOM_SEED_LENGTH];
+ 
+ 	get_random_bytes(randbuf, BRCMF_RANDOM_SEED_LENGTH);
+-	memcpy_toio(devinfo->tcm + address, randbuf, BRCMF_RANDOM_SEED_LENGTH);
++	brcmf_pcie_tcm_toio(devinfo, address, randbuf, BRCMF_RANDOM_SEED_LENGTH);
+ }
+ 
+ static int brcmf_pcie_download_fw_nvram(struct brcmf_pciedev_info *devinfo,
+@@ -1708,8 +1773,7 @@ static int brcmf_pcie_download_fw_nvram(struct brcmf_pciedev_info *devinfo,
+ 		return err;
+ 
+ 	brcmf_dbg(PCIE, "Download FW %s\n", devinfo->fw_name);
+-	memcpy_toio(devinfo->tcm + devinfo->ci->rambase,
+-		    (void *)fw->data, fw->size);
++	brcmf_pcie_tcm_toio(devinfo, devinfo->ci->rambase, fw->data, fw->size);
+ 
+ 	resetintr = get_unaligned_le32(fw->data);
+ 	release_firmware(fw);
+@@ -1723,7 +1787,7 @@ static int brcmf_pcie_download_fw_nvram(struct brcmf_pciedev_info *devinfo,
+ 		brcmf_dbg(PCIE, "Download NVRAM %s\n", devinfo->nvram_name);
+ 		address = devinfo->ci->rambase + devinfo->ci->ramsize -
+ 			  nvram_len;
+-		memcpy_toio(devinfo->tcm + address, nvram, nvram_len);
++		brcmf_pcie_tcm_toio(devinfo, address, nvram, nvram_len);
+ 		brcmf_fw_nvram_free(nvram);
+ 
+ 		if (devinfo->fwseed) {
+@@ -1739,8 +1803,8 @@ static int brcmf_pcie_download_fw_nvram(struct brcmf_pciedev_info *devinfo,
+ 			brcmf_dbg(PCIE, "Download random seed\n");
+ 
+ 			address -= sizeof(footer);
+-			memcpy_toio(devinfo->tcm + address, &footer,
+-				    sizeof(footer));
++			brcmf_pcie_tcm_toio(devinfo, address, &footer,
++					    sizeof(footer));
+ 
+ 			address -= rand_len;
+ 			brcmf_pcie_provide_random_bytes(devinfo, address);
+@@ -1761,7 +1825,9 @@ static int brcmf_pcie_download_fw_nvram(struct brcmf_pciedev_info *devinfo,
+ 	brcmf_dbg(PCIE, "Wait for FW init\n");
+ 	sharedram_addr = sharedram_addr_written;
+ 	loop_counter = BRCMF_PCIE_FW_UP_TIMEOUT / 50;
+-	while ((sharedram_addr == sharedram_addr_written) && (loop_counter)) {
++	/* all ones: the backplane is briefly unreachable while the firmware boots (BCM4389) */
++	while ((sharedram_addr == sharedram_addr_written || sharedram_addr == 0xffffffff) &&
++	       loop_counter) {
+ 		msleep(50);
+ 		sharedram_addr = brcmf_pcie_read_ram32(devinfo,
+ 						       devinfo->ci->ramsize -
+@@ -1814,6 +1880,9 @@ static int brcmf_pcie_get_resource(struct brcmf_pciedev_info *devinfo)
+ 
+ 	devinfo->regs = ioremap(bar0_addr, BRCMF_PCIE_REG_MAP_SIZE);
+ 	devinfo->tcm = ioremap(bar1_addr, bar1_size);
++	devinfo->tcm_size = bar1_size;
++	pci_read_config_dword(pdev, BRCMF_PCIE_BAR1_WINDOW, &devinfo->tcm_win);
++	spin_lock_init(&devinfo->tcm_lock);
+ 
+ 	if (!devinfo->regs || !devinfo->tcm) {
+ 		brcmf_err(bus, "ioremap() failed (%p,%p)\n", devinfo->regs,
+@@ -2760,6 +2829,7 @@ static const struct pci_device_id brcmf_pcie_devid_table[] = {
+ 	BRCMF_PCIE_DEVICE(BRCM_PCIE_4377_DEVICE_ID, WCC_SEED),
+ 	BRCMF_PCIE_DEVICE(BRCM_PCIE_4378_DEVICE_ID, WCC_SEED),
+ 	BRCMF_PCIE_DEVICE(BRCM_PCIE_4387_DEVICE_ID, WCC_SEED),
++	BRCMF_PCIE_DEVICE(BRCM_PCIE_4389_DEVICE_ID, WCC_SEED),
+ 	BRCMF_PCIE_DEVICE(BRCM_PCIE_43752_DEVICE_ID, WCC_SEED),
+ 	BRCMF_PCIE_DEVICE(CY_PCIE_54591_DEVICE_ID, CYW),
+ 	{ /* end: all zeroes */ }
+diff --git a/drivers/net/wireless/broadcom/brcm80211/include/brcm_hw_ids.h b/drivers/net/wireless/broadcom/brcm80211/include/brcm_hw_ids.h
+index df3b67ba4..bcb68ae6b 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/include/brcm_hw_ids.h
++++ b/drivers/net/wireless/broadcom/brcm80211/include/brcm_hw_ids.h
+@@ -57,6 +57,7 @@
+ #define BRCM_CC_4377_CHIP_ID		0x4377
+ #define BRCM_CC_4378_CHIP_ID		0x4378
+ #define BRCM_CC_4387_CHIP_ID		0x4387
++#define BRCM_CC_4389_CHIP_ID		0x4389
+ #define CY_CC_4373_CHIP_ID		0x4373
+ #define CY_CC_43012_CHIP_ID		43012
+ #define CY_CC_43439_CHIP_ID		43439
+@@ -99,6 +100,7 @@
+ #define BRCM_PCIE_4377_DEVICE_ID	0x4488
+ #define BRCM_PCIE_4378_DEVICE_ID	0x4425
+ #define BRCM_PCIE_4387_DEVICE_ID	0x4433
++#define BRCM_PCIE_4389_DEVICE_ID	0x4441
+ #define CY_PCIE_54591_DEVICE_ID		0x4417
+ 
+ /* brcmsmac IDs */
+-- 
+2.56.1
+

@@ -1,0 +1,52 @@
+From 5d7ec9e85287164bf79f310fe059634d5b684d73 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 20:17:03 +0100
+Subject: [PATCH 52/53] PCI: exynos2200: S2MPU restore, Samsung's WLAN power-on
+ delay
+
+After the HSI1 domain comes up its S2MPU blocks device DMA until EL2
+restores it (HVC 0xc6000108 with the domain index from the TZPC SMC).
+WLAN_EN settles 200 ms, as in Samsung's DHD platform code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/pci/controller/dwc/pcie-exynos2200.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/pci/controller/dwc/pcie-exynos2200.c b/drivers/pci/controller/dwc/pcie-exynos2200.c
+index b9d9a4898..9b277e36f 100644
+--- a/drivers/pci/controller/dwc/pcie-exynos2200.c
++++ b/drivers/pci/controller/dwc/pcie-exynos2200.c
+@@ -55,6 +55,7 @@
+ #define CMU_HSI1_BASE		0x11200000
+ #define SMC_TZPC_RESTORE	0x82000410	/* (1, TZPC of HSI1, 2), after the domain is on */
+ #define TZPC_HSI1		0x11210204
++#define HVC_S2MPU_BACKUP_RESTORE 0xc6000108	/* (1 = restore, domain index from the SMC) */
+ #define GPF0_BASE		0x11240000	/* pinctrl_hsi1: 0 CLKREQ#, 1 PERST# */
+ 
+ struct exynos2200_pcie {
+@@ -83,6 +84,12 @@ static int e22_power_on(struct exynos2200_pcie *ep)
+ 		if (ret)
+ 			return ret;
+ 		arm_smccc_smc(SMC_TZPC_RESTORE, 1, TZPC_HSI1, 2, 0, 0, 0, 0, &res);
++		if (res.a0)
++			return -EIO;
++		/* the domain's S2MPU comes up blocking DMA until EL2 restores it */
++		arm_smccc_hvc(HVC_S2MPU_BACKUP_RESTORE, 1, res.a1, 0, 0, 0, 0, 0, &res);
++		if (res.a0)
++			dev_warn(ep->pci.dev, "S2MPU restore: %#lx\n", res.a0);
+ 	}
+ 	/* CMU_HSI1 user muxes to the PLL side */
+ 	writel(0x10, ep->cmu + 0x610);
+@@ -230,7 +237,7 @@ static int e22_host_init(struct dw_pcie_rp *pp)
+ 
+ 	if (ep->wlan_en) {
+ 		gpiod_set_value_cansleep(ep->wlan_en, 1);
+-		msleep(50);
++		msleep(200);		/* Samsung's WIFI_TURNON_DELAY */
+ 	}
+ 	ret = e22_power_on(ep);
+ 	if (ret)
+-- 
+2.56.1
+
