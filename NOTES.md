@@ -1,5 +1,17 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27 (late): CPU thermal zones, charging at 1.3 A, Wine for the phone
+- exynos2200-acpm-tmu: TMU zones 0-2 (BIG MID LITTLE) via ACPM as DT thermal zones, cpufreq
+  cooling per cluster: passive 80 C, critical 105 C. Builds under full load died silently before
+  (peltier on the back now; under -j6 with capped clocks 46-48 C).
+- Charger (MAX77705 @0x69 on i2c-0): chip default CHGIN limit 500 mA (CNFG_09 0xc0 = 0x13), charge
+  current 450 mA (CNFG_02 0xb9 = 0x49) -> ~180 mA into the battery on the dock. b0s-charge.service
+  sets 1500/1500 mA: ~1.3 A. Samsung's formula: ILIM code = mA/25 - 1 (mainline's driver uses
+  mA/25). Registers per Samsung's max77705-private.h (CNFG_06 0xbd, not 0xbc). Next: mainline
+  max77705 MFD + charger driver (IRQ gpa0-0, active low).
+- Wine 11.23 for aarch64 cross-built on the PC (tools/wine-cross.sh, phone sysroot), /opt/wine.
+  BeamNG.drive (Windows ARM64 build, own Vulkan renderer -gfx vk) in /opt/beamng.
+
 ## 2026-11-27: ztOS staged in /ztos (not booted yet)
 - ztOS 0.2.3-BETA-1.3 qemu image's root partition copied to /ztos on userdata; tools/ztos-layer.sh
   adds our modules, firmware (sgpu, vangogh, brcm 4389), /opt/mesa-xc, GPU bring-up, usb0/sshd, Wi-Fi

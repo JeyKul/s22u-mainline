@@ -1,0 +1,298 @@
+From f6521f210224957f9d9b1170d2163b17f94e41ec Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 23:21:44 +0100
+Subject: [PATCH 55/55] thermal: exynos2200: CPU thermal zones from the ACPM
+ TMU
+
+Read Samsung's TMU zones through ACPM and throttle each CPU cluster from
+80 C (cpufreq cooling), critical at 105 C.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 99 +++++++++++++++++++
+ drivers/thermal/samsung/Kconfig               |  7 ++
+ drivers/thermal/samsung/Makefile              |  1 +
+ drivers/thermal/samsung/exynos2200_acpm_tmu.c | 91 +++++++++++++++++
+ 4 files changed, 198 insertions(+)
+ create mode 100644 drivers/thermal/samsung/exynos2200_acpm_tmu.c
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 82b79860a..89f7f8138 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -15,6 +15,7 @@
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/interrupt-controller/irq.h>
+ #include <dt-bindings/soc/samsung,exynos-usi.h>
++#include <dt-bindings/thermal/thermal.h>
+ 
+ / {
+ 	model = "Samsung Galaxy S22 Ultra (SM-S908B)";
+@@ -461,41 +462,49 @@ opp-2400000000 {
+ };
+ 
+ &cpu0 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 2>;
+ 	operating-points-v2 = <&cpu_little_opp>;
+ };
+ 
+ &cpu1 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 2>;
+ 	operating-points-v2 = <&cpu_little_opp>;
+ };
+ 
+ &cpu2 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 2>;
+ 	operating-points-v2 = <&cpu_little_opp>;
+ };
+ 
+ &cpu3 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 2>;
+ 	operating-points-v2 = <&cpu_little_opp>;
+ };
+ 
+ &cpu4 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 3>;
+ 	operating-points-v2 = <&cpu_mid_opp>;
+ };
+ 
+ &cpu5 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 3>;
+ 	operating-points-v2 = <&cpu_mid_opp>;
+ };
+ 
+ &cpu6 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 3>;
+ 	operating-points-v2 = <&cpu_mid_opp>;
+ };
+ 
+ &cpu7 {
++	#cooling-cells = <2>;
+ 	clocks = <&acpm_ipc 4>;
+ 	operating-points-v2 = <&cpu_big_opp>;
+ };
+@@ -789,3 +798,93 @@ pcie@113b0000 {
+ 		wlan-en-gpios = <&s2mps26 18 GPIO_ACTIVE_HIGH>;
+ 	};
+ };
++
++/*
++ * CPU thermal limits: the TMU is ACPM's (exynos2200-acpm-tmu reads it). Over 80 C the
++ * cluster's clock steps down; 105 C shuts down.
++ */
++/ {
++	acpm_tmu: thermal-sensor {
++		compatible = "samsung,exynos2200-acpm-tmu";
++		samsung,acpm-ipc = <&acpm_ipc>;
++		#thermal-sensor-cells = <1>;
++	};
++
++	thermal-zones {
++		big-thermal {
++			polling-delay-passive = <250>;
++			polling-delay = <1000>;
++			thermal-sensors = <&acpm_tmu 0>;
++
++			trips {
++				big_alert: big-alert {
++					temperature = <80000>;
++					hysteresis = <3000>;
++					type = "passive";
++				};
++				big-crit {
++					temperature = <105000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&big_alert>;
++					cooling-device = <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++		mid-thermal {
++			polling-delay-passive = <250>;
++			polling-delay = <1000>;
++			thermal-sensors = <&acpm_tmu 1>;
++
++			trips {
++				mid_alert: mid-alert {
++					temperature = <80000>;
++					hysteresis = <3000>;
++					type = "passive";
++				};
++				mid-crit {
++					temperature = <105000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&mid_alert>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++		little-thermal {
++			polling-delay-passive = <250>;
++			polling-delay = <1000>;
++			thermal-sensors = <&acpm_tmu 2>;
++
++			trips {
++				little_alert: little-alert {
++					temperature = <80000>;
++					hysteresis = <3000>;
++					type = "passive";
++				};
++				little-crit {
++					temperature = <105000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&little_alert>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++	};
++};
+diff --git a/drivers/thermal/samsung/Kconfig b/drivers/thermal/samsung/Kconfig
+index e1e8035d2..a7afff70b 100644
+--- a/drivers/thermal/samsung/Kconfig
++++ b/drivers/thermal/samsung/Kconfig
+@@ -10,3 +10,10 @@ config EXYNOS_THERMAL
+ 	  the TMU, reports temperature and handles cooling action if defined.
+ 	  This driver uses the Exynos core thermal APIs and TMU configuration
+ 	  data from the supported SoCs.
++
++config EXYNOS2200_ACPM_TMU
++	tristate "Exynos 2200 TMU temperatures through ACPM"
++	depends on EXYNOS_ACPM_PROTOCOL && THERMAL_OF
++	help
++	  Thermal zones for the Exynos 2200 CPU clusters, GPU and other blocks,
++	  read from the TMU through the ACPM firmware.
+diff --git a/drivers/thermal/samsung/Makefile b/drivers/thermal/samsung/Makefile
+index f13940715..e8bf3fa98 100644
+--- a/drivers/thermal/samsung/Makefile
++++ b/drivers/thermal/samsung/Makefile
+@@ -4,3 +4,4 @@
+ #
+ obj-$(CONFIG_EXYNOS_THERMAL)			+= exynos_thermal.o
+ exynos_thermal-y				:= exynos_tmu.o
++obj-$(CONFIG_EXYNOS2200_ACPM_TMU)		+= exynos2200_acpm_tmu.o
+diff --git a/drivers/thermal/samsung/exynos2200_acpm_tmu.c b/drivers/thermal/samsung/exynos2200_acpm_tmu.c
+new file mode 100644
+index 000000000..30fff058e
+--- /dev/null
++++ b/drivers/thermal/samsung/exynos2200_acpm_tmu.c
+@@ -0,0 +1,91 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Exynos 2200 TMU temperatures through ACPM (channel 7). The firmware owns the
++ * TMU; Linux only reads the zones (0 BIG, 1 MID, 2 LITTLE, 3 G3D, 4 ISP, 5 NPU,
++ * 6 CP, whole deg C) so that DT thermal zones can throttle the CPUs.
++ */
++#include <linux/firmware/samsung/exynos-acpm-protocol.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/thermal.h>
++
++#include "../thermal_hwmon.h"
++
++#define ACPM_TMU_CHAN	7
++#define ACPM_TMU_ZONES	7
++
++struct acpm_tmu_zone {
++	struct acpm_handle *acpm;
++	u8 tz;
++};
++
++static int acpm_tmu_get_temp(struct thermal_zone_device *tzd, int *temp)
++{
++	struct acpm_tmu_zone *z = thermal_zone_device_priv(tzd);
++	int t, ret;
++
++	ret = z->acpm->ops->tmu.read_temp(z->acpm, ACPM_TMU_CHAN, z->tz, &t);
++	if (ret)
++		return ret;
++	if (t <= 0 || t > 150)
++		return -EIO;
++	*temp = t * 1000;
++	return 0;
++}
++
++static const struct thermal_zone_device_ops acpm_tmu_ops = {
++	.get_temp = acpm_tmu_get_temp,
++};
++
++static int acpm_tmu_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct acpm_handle *acpm;
++	int i, n = 0;
++
++	acpm = devm_acpm_get_by_phandle(dev);
++	if (IS_ERR(acpm))
++		return dev_err_probe(dev, PTR_ERR(acpm), "no ACPM\n");
++	if (!acpm->ops->tmu.read_temp)
++		return -ENODEV;
++
++	for (i = 0; i < ACPM_TMU_ZONES; i++) {
++		struct thermal_zone_device *tzd;
++		struct acpm_tmu_zone *z;
++
++		z = devm_kzalloc(dev, sizeof(*z), GFP_KERNEL);
++		if (!z)
++			return -ENOMEM;
++		z->acpm = acpm;
++		z->tz = i;
++		tzd = devm_thermal_of_zone_register(dev, i, z, &acpm_tmu_ops);
++		if (IS_ERR(tzd)) {
++			if (PTR_ERR(tzd) != -ENODEV)
++				dev_warn(dev, "zone %d: %pe\n", i, tzd);
++			continue;
++		}
++		devm_thermal_add_hwmon_sysfs(dev, tzd);
++		n++;
++	}
++	dev_info(dev, "%d thermal zones\n", n);
++	return 0;
++}
++
++static const struct of_device_id acpm_tmu_of_match[] = {
++	{ .compatible = "samsung,exynos2200-acpm-tmu" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, acpm_tmu_of_match);
++
++static struct platform_driver acpm_tmu_driver = {
++	.probe = acpm_tmu_probe,
++	.driver = {
++		.name = "exynos2200-acpm-tmu",
++		.of_match_table = acpm_tmu_of_match,
++	},
++};
++module_platform_driver(acpm_tmu_driver);
++
++MODULE_DESCRIPTION("Exynos 2200 TMU temperatures through ACPM");
++MODULE_LICENSE("GPL");
+-- 
+2.56.1
+

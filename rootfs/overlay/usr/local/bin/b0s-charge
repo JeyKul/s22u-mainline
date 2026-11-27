@@ -1,0 +1,7 @@
+#!/bin/sh
+# MAX77705 charger limits until the kernel charger driver is in (registers as Samsung's driver
+# names them; the chip default input limit is 500 mA). i2c-0 is the i2c-gpio bus, charger at 0x69.
+# CNFG_09 0xc0: CHGIN input limit, (mA / 25) - 1. CNFG_02 0xb9: fast charge current, mA / 50 (bits 5:0).
+ILIM=${1:-1500} ICHG=${2:-1500}
+i2cset -y -f 0 0x69 0xc0 $((ILIM / 25 - 1))
+i2cset -y -f 0 0x69 0xb9 $(( ($(i2cget -y -f 0 0x69 0xb9) & 0xc0) | (ICHG / 50) ))
