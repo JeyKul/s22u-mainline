@@ -1,7 +1,7 @@
 From ac8739de016406c9b0274d3d9df6a05b7f62ed8c Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 20:17:04 +0100
-Subject: [PATCH 53/53] wifi: brcmfmac: BCM4389 (Galaxy S22 series)
+Subject: [PATCH 53/54] wifi: brcmfmac: BCM4389 (Galaxy S22 series)
 
 PCIe 14e4:4441, firmware brcmfmac4389c1-pcie (Samsung's bcmdhd_sta.bin,
 nvram.txt, bcmdhd_clm.blob). What it needed, mostly following

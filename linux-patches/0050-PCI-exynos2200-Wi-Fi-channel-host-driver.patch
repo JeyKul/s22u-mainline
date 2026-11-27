@@ -1,7 +1,7 @@
 From 6b1c94a3934ac51f6becdd7bbd46dde8db6db4a6 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 18:33:44 +0100
-Subject: [PATCH 50/53] PCI: exynos2200: Wi-Fi channel host driver
+Subject: [PATCH 50/54] PCI: exynos2200: Wi-Fi channel host driver
 
 Channel 0 of the Exynos 2200's PCIe (gen2 x1, BCM4389 on the Galaxy S22
 series): HSI1 power domain and TZPC restore, PHY (PMA/PCS) init, PERST#,

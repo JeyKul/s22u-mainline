@@ -1,0 +1,42 @@
+From 2aaa1edb48b38ff5bcf68676265c70479236e479 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 20:39:43 +0100
+Subject: [PATCH 54/54] wifi: brcmfmac: BCM4389: check the trap flag before
+ ringing the doorbell
+
+The check described in the BCM4389 commit was lost; with it a firmware
+assert is noticed on the next host request and the bus reset reloads the
+firmware (about 2 s).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../net/wireless/broadcom/brcm80211/brcmfmac/pcie.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+index 5b24816d0..eb3c283ee 100644
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -1126,7 +1126,18 @@ static int brcmf_pcie_ring_mb_ring_bell(void *ctx)
+ 		return -EIO;
+ 
+ 	brcmf_dbg(PCIE, "RING !\n");
+-	brcmf_pcie_bus_console_read(devinfo, false);
++	/*
++	 * BCM4389 firmware asserts now and then without telling the host (no FWHALT mailbox
++	 * message): notice the trap flag before waiting on a response, and let the bus reset
++	 * reload the firmware.
++	 */
++	if (devinfo->ci->chip == BRCM_CC_4389_CHIP_ID && devinfo->shared.tcm_base_address &&
++	    (brcmf_pcie_read_tcm32(devinfo, devinfo->shared.tcm_base_address) &
++	     BRCMF_PCIE_SHARED_TRAP)) {
++		brcmf_pcie_bus_console_read(devinfo, true);
++		brcmf_fw_crashed(&devinfo->pdev->dev);
++		return -EIO;
++	}
+ 	/* Any arbitrary value will do, lets use 1 */
+ 	brcmf_pcie_write_reg32(devinfo, devinfo->reginfo->h2d_mailbox_0, 1);
+ 
+-- 
+2.56.1
+

@@ -1,7 +1,7 @@
 From d747bfbf91b094d426dbbb8f65918397204b78d8 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:12:35 +0100
-Subject: [PATCH 39/53] clk: samsung: acpm: Exynos 2200 DVFS domains
+Subject: [PATCH 39/54] clk: samsung: acpm: Exynos 2200 DVFS domains
 
 Register the ACPM clocks device for the Exynos 2200 and list its DVFS domains
 in the order of the firmware's frequency/voltage map (MIF, INT, CPUCL0-2,
