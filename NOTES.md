@@ -1,5 +1,12 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: suspend groundwork (paused)
+- PM_DEBUG on. pm_test devices (s2idle): brcmfmac D3 entry times out (unload it around sleep);
+  dwc3 resume SError'd: exynos2200 phy_exit asserted LINK_SW_RST, dwc3 writes link regs before
+  phy_init -> fixed (no link reset in exit). devices level passes now, USB back after resume.
+- Open: real s2idle (power key is a wake IRQ already), brcmfmac sleep hook, RTC wake alarm.
+- Touch: stm-fts-spi no longer DROP_UNUSED; lift+touch of one slot split into two frames (unverified).
+
 ## 2026-11-28: charger driver
 - Mainline max77705-charger as a standalone node (charger@69, IRQ gpa0-0 low, simple-battery 4.4 V
   / 3150 mA / 5000 mAh). INTSRC (0x66:0x22) had USB-C pending and unmasked after boot (0x08, mask

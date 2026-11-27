@@ -1,0 +1,37 @@
+From 57baf1ca36ae9509f4de0696ea76af109ca52ef9 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 00:42:20 +0100
+Subject: [PATCH 59/59] phy: exynos5-usbdrd: exynos2200: don't reset the link
+ in phy_exit
+
+On system resume dwc3 programs GUSB2PHYCFG before phy_init() releases
+LINK_SW_RST again; the access to a link held in reset raises an SError.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/phy/samsung/phy-exynos5-usbdrd.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/phy/samsung/phy-exynos5-usbdrd.c b/drivers/phy/samsung/phy-exynos5-usbdrd.c
+index 8711a3b62..697b43828 100644
+--- a/drivers/phy/samsung/phy-exynos5-usbdrd.c
++++ b/drivers/phy/samsung/phy-exynos5-usbdrd.c
+@@ -1481,10 +1481,11 @@ static int exynos2200_usbdrd_phy_exit(struct phy *phy)
+ 	reg &= ~(EXYNOS2200_UTMI_FORCE_BVALID | EXYNOS2200_UTMI_FORCE_VBUSVALID);
+ 	writel(reg, regs_base + EXYNOS2200_DRD_UTMI);
+ 
+-	reg = readl(regs_base + EXYNOS2200_DRD_CLKRST);
+-	reg |= CLKRST_LINK_SW_RST;
+-	writel(reg, regs_base + EXYNOS2200_DRD_CLKRST);
+-
++	/*
++	 * No LINK_SW_RST here: on system resume dwc3 writes its GUSB2PHYCFG etc.
++	 * before phy_init() would release the link again, and a link held in
++	 * reset answers with an SError.
++	 */
+ 	clk_bulk_disable_unprepare(phy_drd->drv_data->n_clks, phy_drd->clks);
+ 
+ 	exynos5_usbdrd_phy_isol(inst, true);
+-- 
+2.56.1
+

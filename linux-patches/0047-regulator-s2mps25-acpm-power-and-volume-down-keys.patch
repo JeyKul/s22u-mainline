@@ -1,7 +1,7 @@
 From 8164b3927de2869d357197a944cc31326e5800da Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 18:11:41 +0100
-Subject: [PATCH 47/57] regulator: s2mps25-acpm: power and volume-down keys
+Subject: [PATCH 47/59] regulator: s2mps25-acpm: power and volume-down keys
 
 The S2MPS25 signals key presses through the VGPIO block (GIC SPI 37):
 clear its pending bits, read INT1..INT8 over ACPM and report INT1 power

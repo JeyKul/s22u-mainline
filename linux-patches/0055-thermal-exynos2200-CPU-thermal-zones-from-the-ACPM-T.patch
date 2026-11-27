@@ -1,7 +1,7 @@
 From f6521f210224957f9d9b1170d2163b17f94e41ec Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 23:21:44 +0100
-Subject: [PATCH 55/57] thermal: exynos2200: CPU thermal zones from the ACPM
+Subject: [PATCH 55/59] thermal: exynos2200: CPU thermal zones from the ACPM
  TMU
 
 Read Samsung's TMU zones through ACPM and throttle each CPU cluster from

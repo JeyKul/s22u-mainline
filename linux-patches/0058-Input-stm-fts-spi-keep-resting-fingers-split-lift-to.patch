@@ -1,0 +1,78 @@
+From 1868bce759533fb8fa2c4ff0c8380ad52541d40e Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 00:34:36 +0100
+Subject: [PATCH 58/59] Input: stm-fts-spi: keep resting fingers, split
+ lift+touch of one slot
+
+The firmware reports only changes, so INPUT_MT_DROP_UNUSED lifted fingers
+that held still. A lift and a new touch of the same slot in one batch of
+events reached userspace as a tracking id change without the lift
+(libinput: multiple touch down for the same slot): end the frame between.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/stm-fts-spi.c | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/input/touchscreen/stm-fts-spi.c b/drivers/input/touchscreen/stm-fts-spi.c
+index d918744db..fa7c90a66 100644
+--- a/drivers/input/touchscreen/stm-fts-spi.c
++++ b/drivers/input/touchscreen/stm-fts-spi.c
+@@ -84,7 +84,8 @@ static int fts_spi_read_events(struct fts_spi *ts, unsigned int count)
+ 	return spi_sync_transfer(ts->spi, &xfer, 1);
+ }
+ 
+-static void fts_spi_report(struct fts_spi *ts, const u8 *ev)
++/* *released: slots lifted earlier in this batch of events */
++static void fts_spi_report(struct fts_spi *ts, const u8 *ev, unsigned long *released)
+ {
+ 	unsigned int tid = FTS_TID(ev[0]);
+ 	unsigned int action = FTS_ACTION(ev[0]);
+@@ -96,9 +97,16 @@ static void fts_spi_report(struct fts_spi *ts, const u8 *ev)
+ 	x = (ev[1] << 4) | (ev[3] >> 4);
+ 	y = (ev[2] << 4) | (ev[3] & 0xf);
+ 
++	if (action != FTS_ACTION_RELEASE && test_bit(tid, released)) {
++		/* lifted and touched again in one batch: end the frame so the lift is seen */
++		input_mt_sync_frame(ts->input);
++		input_sync(ts->input);
++		*released = 0;
++	}
+ 	input_mt_slot(ts->input, tid);
+ 	if (action == FTS_ACTION_RELEASE) {
+ 		input_mt_report_slot_inactive(ts->input);
++		__set_bit(tid, released);
+ 		return;
+ 	}
+ 
+@@ -112,6 +120,7 @@ static void fts_spi_report(struct fts_spi *ts, const u8 *ev)
+ static irqreturn_t fts_spi_irq(int irq, void *data)
+ {
+ 	struct fts_spi *ts = data;
++	unsigned long released = 0;
+ 	unsigned int left, i;
+ 	const u8 *ev;
+ 
+@@ -131,7 +140,7 @@ static irqreturn_t fts_spi_irq(int irq, void *data)
+ 	for (i = 0; i <= left; i++) {
+ 		ev = ts->rx + 2 + i * FTS_EVENT_SIZE;
+ 		if (FTS_EID(ev[0]) == FTS_EID_COORDINATE)
+-			fts_spi_report(ts, ev);
++			fts_spi_report(ts, ev, &released);
+ 	}
+ 
+ 	input_mt_sync_frame(ts->input);
+@@ -230,8 +239,8 @@ static int fts_spi_probe(struct spi_device *spi)
+ 	input_set_abs_params(ts->input, ABS_MT_PRESSURE, 0, 63, 0, 0);
+ 	touchscreen_parse_properties(ts->input, true, &ts->prop);
+ 
+-	ret = input_mt_init_slots(ts->input, FTS_MAX_FINGERS,
+-				  INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
++	/* the firmware reports changes only (a resting finger sends nothing), and every lift */
++	ret = input_mt_init_slots(ts->input, FTS_MAX_FINGERS, INPUT_MT_DIRECT);
+ 	if (ret)
+ 		goto err_off;
+ 
+-- 
+2.56.1
+

@@ -1,7 +1,7 @@
 From cf053b2b72ff31df92c4e66b329c34441a4a32b3 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 18:20:10 +0100
-Subject: [PATCH 49/57] arm64: dts: exynos2200-b0s: battery fuel gauge
+Subject: [PATCH 49/59] arm64: dts: exynos2200-b0s: battery fuel gauge
 
 The MAX77705's gauge at 0x36 on gpm0-0/1 (Samsung's HSI2C 24 bus),
 bit-banged with i2c-gpio. Sense resistor 2 mOhm (Samsung fg_resistor 5).
