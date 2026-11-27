@@ -1,7 +1,7 @@
 From b25b68bd4029919f2732781fea04b9ee04d0b8dd Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 21:52:32 +0100
-Subject: [PATCH 25/45] PCI: add an emulated host for the Exynos 2200 GPU
+Subject: [PATCH 25/46] PCI: add an emulated host for the Exynos 2200 GPU
 
 Present the Xclipse 920 as one PCI function (1002:163F, display class)
 with fixed BARs over its register windows (BAR5 GC, BAR2 doorbells),

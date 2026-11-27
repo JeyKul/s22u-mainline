@@ -1,7 +1,7 @@
 From badfa300be4330b8cba392294c873733d648da73 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:53:13 +0100
-Subject: [PATCH 45/45] drm/exynos2200: dsim: platform backlight type
+Subject: [PATCH 45/46] drm/exynos2200: dsim: platform backlight type
 
 KWin pairs a raw backlight with a panel only when both hang off the same
 device; the backlight lives on DSIM, the KMS device is DECON. As a platform

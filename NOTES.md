@@ -1,5 +1,10 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: screen off/on (DPMS) works; Kinect check
+- Panel sleep needs Samsung's level keys around 28h/10h (and frames flowing while sent): verified
+  black with the user's Kinect v2 (PC). DECON disable: panel off + TRIG_CON.HW_TRIG_MASK_DECON
+  (frame IRQs 123/s -> 0); enable reverses. powerdevil: screen off after 60 s idle.
+
 ## 2026-11-26 (night 5): Wi-Fi step 1, PCIe controller reachable
 - HSI1 power domain was off (PMU 0x15862580 = 0). On by hand: HSI1_CONFIGURATION bit0, STATUS bit0,
   TZPC restore SMC 0x82000410 (1, 0x11210204, 2) -> a0 0, CMU_HSI1 user muxes 0x0610/0x0620 = 0x10.

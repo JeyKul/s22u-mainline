@@ -39,7 +39,7 @@ minimum target: GPU, display, HDMI.
 
 | Hardware | State | Notes |
 |---|---|---|
-| **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | Own KMS driver on DECON0/DPP0 (exynos2200-decon): GPU buffers flipped directly at 120 Hz with vblank, no copy. Panel/DSI init still S-Boot's; next: own panel init (on/off, 60 Hz), SysMMU |
+| **Goal** Display: 1440x3088 AMOLED (DSI) | 🟡 | Own KMS driver on DECON0/DPP0 (exynos2200-decon): GPU buffers flipped directly at 120 Hz with vblank, no copy. Screen off/on (DPMS, panel sleep) works. Panel/DSI init still S-Boot's; next: 60 Hz, SysMMU |
 | Brightness | ✅ | `/sys/class/backlight/panel` (0-2039, DCS 51h): DSIM re-initialised with Samsung's cal so commands reach the panel |
 | **Goal** GPU: Xclipse 920 (RDNA2-style GC 10.3 regs, **gfx11 shader ISA** "gfx1040") | 🟡 | Mainline amdgpu: init, GFX ring + IB tests pass. Mesa (mesa-patches/, `ACO_XCLIPSE=1`): **RADV and radeonsi draw correct triangles** (GLES 2222 FPS offscreen). Xclipse needs gfx11 shader ABI/descriptors/formats, and no VOPD or s_delay_alu. GPU DVFS 303-903 MHz (governor). DCC, display driver open. See NOTES.md |
 | **Goal** HDMI (USB-C DisplayPort alt mode) | ⬜ | Exynos DP controller + USBDP combo PHY (hacen's patches) + MAX77705 PD/VDM (port from the Tab S7+ driver) + DECON for the DP path |

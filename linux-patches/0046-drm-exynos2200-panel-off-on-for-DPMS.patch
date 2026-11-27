@@ -1,0 +1,130 @@
+From 07b2bc25cf706ff675c69c3949ed5219f90945b3 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:08:40 +0100
+Subject: [PATCH 46/46] drm/exynos2200: panel off/on for DPMS
+
+The CRTC disable puts the S6E3HAE to sleep (display off, sleep in, inside
+the panel's level 1/2 keys, which it needs for these) and masks DECON's TE
+trigger, so DECON and the DSI link stop sending frames; enable reverses it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/gpu/drm/exynos2200/exynos2200_decon.c | 17 ++++++++-
+ drivers/gpu/drm/exynos2200/exynos2200_dsim.c  | 36 +++++++++++++++++++
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_decon.c b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+index d779ec4ff..7272a93e5 100644
+--- a/drivers/gpu/drm/exynos2200/exynos2200_decon.c
++++ b/drivers/gpu/drm/exynos2200/exynos2200_decon.c
+@@ -41,7 +41,11 @@
+ #include <drm/drm_simple_kms_helper.h>
+ #include <drm/drm_vblank.h>
+ 
++int exynos2200_dsim_panel_power(bool on);	/* exynos2200_dsim.c */
++
+ /* DECON0 main */
++#define TRIG_CON		0x0030
++#define HW_TRIG_MASK_DECON	BIT(4)		/* TE no longer starts frames */
+ #define DECON_INT_EN		0x0060
+ #define INT_EN_FRAME_DONE	BIT(13)
+ #define INT_EN			BIT(0)
+@@ -70,6 +74,7 @@ struct e2200_decon {
+ 	void __iomem *decon, *dma;
+ 	resource_size_t boot_fb, boot_fb_size;
+ 
++	bool panel_off;
+ 	spinlock_t lock;		/* event */
+ 	struct drm_pending_vblank_event *event;
+ };
+@@ -135,6 +140,11 @@ static void e2200_pipe_enable(struct drm_simple_display_pipe *pipe,
+ {
+ 	struct e2200_decon *d = to_decon(pipe->crtc.dev);
+ 
++	if (d->panel_off) {
++		writel(readl(d->decon + TRIG_CON) & ~HW_TRIG_MASK_DECON, d->decon + TRIG_CON);
++		exynos2200_dsim_panel_power(true);
++		d->panel_off = false;
++	}
+ 	drm_crtc_vblank_on(&pipe->crtc);
+ 	if (plane_state->fb)
+ 		e2200_decon_set_fb(d, plane_state, NULL);
+@@ -142,8 +152,13 @@ static void e2200_pipe_enable(struct drm_simple_display_pipe *pipe,
+ 
+ static void e2200_pipe_disable(struct drm_simple_display_pipe *pipe)
+ {
+-	/* the panel stays on: S-Boot's power state is all there is so far */
++	struct e2200_decon *d = to_decon(pipe->crtc.dev);
++
++	/* panel to sleep, then no more frames: DECON and the DSI link idle */
+ 	drm_crtc_vblank_off(&pipe->crtc);
++	exynos2200_dsim_panel_power(false);
++	writel(readl(d->decon + TRIG_CON) | HW_TRIG_MASK_DECON, d->decon + TRIG_CON);
++	d->panel_off = true;
+ }
+ 
+ static int e2200_pipe_check(struct drm_simple_display_pipe *pipe,
+diff --git a/drivers/gpu/drm/exynos2200/exynos2200_dsim.c b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
+index 970756a52..7046e099e 100644
+--- a/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
++++ b/drivers/gpu/drm/exynos2200/exynos2200_dsim.c
+@@ -40,6 +40,8 @@ struct exynos2200_dsim {
+ 	struct dentry *dbg;
+ };
+ 
++static struct exynos2200_dsim *exynos2200_dsim_panel;	/* the one panel, for the KMS driver */
++
+ void dpu_print_hex_dump(void __iomem *regs, const void *buf, size_t len)
+ {
+ 	print_hex_dump(KERN_INFO, "", DUMP_PREFIX_OFFSET, 32, 4, buf, len, false);
+@@ -118,6 +120,39 @@ static int exynos2200_dsim_bl_update(struct backlight_device *bl)
+ 	return s6e3hae_set_brightness(dsim, S6E3HAE_BRT_MIN + level);
+ }
+ 
++/*
++ * Panel off/on for DPMS, as Samsung's S6E3HAE (rainbow_b0) sequences do: display off, sleep in
++ * (120 ms), and back: sleep out (120 ms), brightness, display on. The DSI link, DSC and the
++ * panel's settings stay as they are.
++ */
++int exynos2200_dsim_panel_power(bool on)
++{
++	struct exynos2200_dsim *dsim = READ_ONCE(exynos2200_dsim_panel);
++	int ret;
++
++	if (!dsim)
++		return -ENODEV;
++	/* the S6E3HAE ignores these outside its level 1/2 keys (frames must still flow) */
++	ret = dsim_dcs(dsim, 0x9f, 0xa5, 0xa5);
++	ret = ret ?: dsim_dcs(dsim, 0xf0, 0x5a, 0x5a);
++	if (!on) {
++		ret = ret ?: dsim_dcs(dsim, MIPI_DCS_SET_DISPLAY_OFF);
++		msleep(20);
++		ret = ret ?: dsim_dcs(dsim, MIPI_DCS_ENTER_SLEEP_MODE);
++		msleep(120);
++	} else {
++		ret = ret ?: dsim_dcs(dsim, MIPI_DCS_EXIT_SLEEP_MODE);
++		msleep(120);
++		ret = ret ?: dsim_dcs(dsim, MIPI_DCS_SET_DISPLAY_ON);
++	}
++	dsim_dcs(dsim, 0xf0, 0xa5, 0xa5);
++	dsim_dcs(dsim, 0x9f, 0x5a, 0x5a);
++	if (on && !ret)
++		ret = backlight_update_status(dsim->bl);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(exynos2200_dsim_panel_power);
++
+ static const struct backlight_ops exynos2200_dsim_bl_ops = {
+ 	.options = BL_CORE_SUSPENDRESUME,
+ 	.update_status = exynos2200_dsim_bl_update,
+@@ -254,6 +289,7 @@ static int exynos2200_dsim_probe(struct platform_device *pdev)
+ 	dsim->dbg = debugfs_create_file("exynos2200-dsim-dcs", 0200, NULL, dsim,
+ 					&exynos2200_dsim_dbg_fops);
+ 	platform_set_drvdata(pdev, dsim);
++	WRITE_ONCE(exynos2200_dsim_panel, dsim);
+ 	return 0;
+ }
+ 
+-- 
+2.56.1
+
