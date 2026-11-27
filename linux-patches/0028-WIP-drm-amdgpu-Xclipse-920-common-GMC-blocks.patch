@@ -1,7 +1,7 @@
 From 34477bffb0fae50987a610ebeee7d70f9e4c9c14 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 22:06:31 +0100
-Subject: [PATCH 28/48] WIP: drm/amdgpu: Xclipse 920 common + GMC blocks
+Subject: [PATCH 28/49] WIP: drm/amdgpu: Xclipse 920 common + GMC blocks
 
 nbio_v2_3 funcs without the PCIe straps (rev_id 0, memsize = carve-out),
 no-op MMHUB (GFXHUB is the only VM hub), FB_LOCATION over a 127 MiB

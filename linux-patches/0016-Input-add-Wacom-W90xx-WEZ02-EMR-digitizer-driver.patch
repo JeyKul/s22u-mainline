@@ -1,7 +1,7 @@
 From 328e7d84e243ad4b60bd52d625d7a9d646b280be Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:48:30 +0100
-Subject: [PATCH 16/48] Input: add Wacom W90xx/WEZ02 EMR digitizer driver
+Subject: [PATCH 16/49] Input: add Wacom W90xx/WEZ02 EMR digitizer driver
 
 Pen digitizer of Samsung phones such as the Galaxy S22 Ultra (S Pen).
 A plain I2C read returns a 17-byte packet whose low nibble of byte 0 is

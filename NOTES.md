@@ -1,5 +1,11 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: battery gauge
+- i2c-gpio on gpm0-0/1: 0x25, 0x36 (FG), 0x57 (PCA9468), 0x66 (MAX77705 top), 0x69 (charger).
+- max17042 driver (compatible max17047), rsns 2000: 70 %, full 4475 mAh, UPower sees it.
+- Charger (read-only): CNFG_00 mode 5 (charge+buck), CHGIN_LIM 0x13 (~500 mA, USB SDP), DTLS fast
+  charge; on PC USB still -220 mA net at idle. No charger driver yet (no BC1.2/AFC).
+
 ## 2026-11-27: RTC, module installer
 - PMIC RTC (ACPM type 0x04, msec at 0x04, sec..year 0x05..0x0b, binary; RUDR/WUDR in 0x02) as rtc0;
   it had run since 2021-01-02 unset. Set from the PC, TZ Europe/Berlin.

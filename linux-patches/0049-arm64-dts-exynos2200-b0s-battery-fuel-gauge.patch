@@ -1,0 +1,44 @@
+From cf053b2b72ff31df92c4e66b329c34441a4a32b3 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:20:10 +0100
+Subject: [PATCH 49/49] arm64: dts: exynos2200-b0s: battery fuel gauge
+
+The MAX77705's gauge at 0x36 on gpm0-0/1 (Samsung's HSI2C 24 bus),
+bit-banged with i2c-gpio. Sense resistor 2 mOhm (Samsung fg_resistor 5).
+Compatible max17047: the max77705-battery one has no I2C id entry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index cf0fd4efa..f262c769f 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -51,6 +51,22 @@ rtcclk: clock-rtcclk {
+ 	};
+ 
+ 	/* Power and Volume Down are PMIC keys (s2mps25), not wired here yet */
++	/* Samsung drives this bus with the CMGP HSI2C (USI24); bit-banged here */
++	i2c-max77705 {
++		compatible = "i2c-gpio";
++		scl-gpios = <&gpm0 0 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
++		sda-gpios = <&gpm0 1 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
++		i2c-gpio,delay-us = <2>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		fuel-gauge@36 {
++			compatible = "maxim,max17047";	/* the MAX77705 gauge; that compatible has no I2C id here */
++			reg = <0x36>;
++			maxim,rsns-microohm = <2000>;	/* Samsung: fg_resistor 5 = 2 mOhm */
++		};
++	};
++
+ 	gpio-keys {
+ 		compatible = "gpio-keys";
+ 
+-- 
+2.56.1
+
