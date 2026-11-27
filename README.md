@@ -18,20 +18,20 @@ minimum target: GPU, display, HDMI.
 |---|---|---|
 | Boot: S-Boot → uniLoader → Linux v7.3 | ✅ | Kernel 0.6 s, systemd 4.4 s; kernel log on the panel from the first line |
 | CPUs: 4x A510, 3x A710, 1x X2 | ✅ | 8/8 up (PSCI over smc). Needs `arm64.nomte arm64.nosve arm64.nompam` (EL2 traps them) |
-| CPU frequency (DVFS) | ⬜ | ACPM DVFS; mainline has `exynos-acpm-dvfs` (gs101) to adapt |
+| CPU frequency (DVFS) | ✅ | clk-acpm (Exynos 2200 domains) + cpufreq-dt, schedutil; top levels left out until CPU thermal limits |
 | RAM | ✅ | 11 GB usable; all stock carve-outs kept out |
 | Storage: UFS 3.1 | ✅ | HS-G4, 2 lanes; reads verified against the stock partitions |
 | Rootfs on userdata | ✅ | Arch Linux ARM on f2fs (the whole 464 GB); userspace up in about 5 s |
 | Desktop | ✅ | **Plasma Mobile (default) and XFCE on Wayland, rendered by the Xclipse 920 GPU** (KWin/labwc): GLES compositing, GL 4.6/GLES 3.2/Vulkan 1.4 for apps; scan-out through simpledrm. LightDM autologin, 2x scaling. X11 XFCE session still there |
 | ACPM (APM co-processor IPC) | ✅ | Mainline gs101 driver + Exynos 2200 variant (SRAM init data 0xf800, exynos850 mailbox, SPMI PMIC format) |
-| PMIC: S2MPS25/S2MPS26/S2MPM07 regulators | 🟡 | New `s2mps25-acpm` driver (SID 0/1/2); only DT-listed rails are registered (touch, S Pen). Keys, RTC: not yet |
+| PMIC: S2MPS25/S2MPS26/S2MPM07 | ✅ | New `s2mps25-acpm` driver (SID 0/1/2): DT-listed rails, power/volume-down keys, RTC (rtc0), S2MPS26 GPIOs (WLAN_EN) |
 | Power domains, IOMMU (SysMMU) | ⬜ | Needed by display, GPU, DP, codecs |
-| Thermal (TMU) | ⬜ | `exynos-acpm-tmu` |
+| Thermal (TMU) | 🟡 | All 7 zones read over ACPM by the GPU governor (throttles G3D); no thermal zones for the CPUs yet |
 | Watchdog | ⬜ | uniLoader turns it off |
 | Back to TWRP | ✅ | `twrp`, `reboot recovery`, Volume Up held 2 s |
 | Volume Up | ✅ | GPIO key |
-| Power, Volume Down | ⬜ | PMIC keys |
-| Battery, charging: MAX77705 + fuel gauge | ⬜ | S2MPS charger path; same MAX77705 as the Tab S7+ |
+| Power, Volume Down | ✅ | PMIC keys via the VGPIO interrupt; power toggles the screen |
+| Battery, charging: MAX77705 + fuel gauge | 🟡 | Fuel gauge (max17042 driver, i2c-gpio): level, voltage, current in UPower. Charging runs on the chip's defaults (~500 mA input); no charger driver |
 | Vibration | ⬜ | |
 | Suspend | ⬜ | |
 
@@ -55,7 +55,7 @@ minimum target: GPU, display, HDMI.
 | USB gadget (serial, network) | ✅ | Root shell on the ACM serial; SSH over NCM at 172.16.42.1 (PC gets .2 by DHCP) |
 | USB 3, USB host (OTG) | ⬜ | hacen's USBDP patches; role switch from MAX77705 |
 | Audio: CS35L41 speakers, ABOX DSP | ⬜ | |
-| Wi-Fi / BT: Broadcom BCM4389 (PCIe) | ⬜ | brcmfmac candidate |
+| Wi-Fi / BT: Broadcom BCM4389 (PCIe) | 🟡 | Wi-Fi works: own PCIe driver (`pcie-exynos2200`) + brcmfmac with BCM4389 support, NetworkManager. Firmware from the vendor partition (`tools/install-wifi-fw.sh`). Firmware asserts every few minutes; the driver reloads it. BT: no |
 | Modem, GNSS, NFC, cameras, sensors | ⬜ | |
 
 ## How it boots
