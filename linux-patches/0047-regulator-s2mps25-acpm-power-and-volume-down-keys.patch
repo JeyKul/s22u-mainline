@@ -1,0 +1,199 @@
+From 8164b3927de2869d357197a944cc31326e5800da Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 18:11:41 +0100
+Subject: [PATCH 47/47] regulator: s2mps25-acpm: power and volume-down keys
+
+The S2MPS25 signals key presses through the VGPIO block (GIC SPI 37):
+clear its pending bits, read INT1..INT8 over ACPM and report INT1 power
+and INT3 volume-down press/release as input events. Layout from Samsung's
+s2mps25 driver.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts |   2 +
+ drivers/regulator/s2mps25-acpm.c              | 135 ++++++++++++++++++
+ 2 files changed, 137 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index bcef2202e..ae6da8440 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -257,6 +257,8 @@ acpm_ipc: power-management {
+ 			/* only the rails Linux uses are listed */
+ 			pmic-main {
+ 				compatible = "samsung,s2mps25-pmic";
++				/* PMIC events via the VGPIO block: power and volume-down keys */
++				interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH 0>;
+ 
+ 				regulators {
+ 					ldo28m: ldo28m {
+diff --git a/drivers/regulator/s2mps25-acpm.c b/drivers/regulator/s2mps25-acpm.c
+index 428211a52..f5d7fa8c5 100644
+--- a/drivers/regulator/s2mps25-acpm.c
++++ b/drivers/regulator/s2mps25-acpm.c
+@@ -9,6 +9,10 @@
+  */
+ 
+ #include <linux/firmware/samsung/exynos-acpm-protocol.h>
++#include <linux/input.h>
++#include <linux/interrupt.h>
++#include <linux/io.h>
++#include <linux/of_irq.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
+ #include <linux/platform_device.h>
+@@ -163,6 +167,132 @@ static const struct regmap_config s2mps_acpm_regmap = {
+ 	.cache_type = REGCACHE_NONE,
+ };
+ 
++
++/*
++ * Power and volume-down keys of the main PMIC (S2MPS25). The PMIC signals the AP through
++ * the VGPIO block (GIC SPI 37): clear the VGPIO pending bits, and if the main PMIC raised
++ * it, read INT1..INT8 (reading clears them): INT1 bits 1/0 are power press/release, INT3
++ * bits 7/6 volume down press/release. Register layout from Samsung's s2mps25 driver.
++ */
++#define S2MPS_TYPE_COM		0x03
++#define S2MPS_TYPE_PM2		0x06
++#define S2MPS_COM_TX_MASK	0x16
++#define S2MPS_IRQ_TX_EN		BIT(7)
++#define S2MPS_PM_IRQM		BIT(0)
++#define S2MPS_PM2_OFF_CTRL1	0x79
++#define S2MPS_VOLDN_IRQ_EN	BIT(5)
++#define S2MPS_INT1		0x00
++#define S2MPS_INT1M		0x08
++#define S2MPS_INT3M		0x0a
++#define S2MPS_PWRON_PRESS	BIT(1)
++#define S2MPS_PWRON_RELEASE	BIT(0)
++#define S2MPS_VOLDN_PRESS	BIT(7)
++#define S2MPS_VOLDN_RELEASE	BIT(6)
++#define VGPIO_MONITOR		0x15960000
++#define VGPIO_IRQ_MAIN		BIT(10)		/* byte 1, bit 2 */
++#define VGPIO2AP_PEND		(0x15980000 + 0x290)
++#define VGPIO2PMU_PEND		(0x159a0000 + 0x290)
++
++struct s2mps_keys {
++	struct s2mps_acpm *pmic;
++	struct input_dev *input;
++	void __iomem *monitor, *pend_ap, *pend_pmu;
++};
++
++static int s2mps_pm_rw(struct s2mps_acpm *pmic, u8 type, u8 reg, u8 *val, bool write)
++{
++	if (write)
++		return pmic->acpm->ops->pmic.write_reg(pmic->acpm, S2MPS_ACPM_CHAN, type, reg,
++						       pmic->sid, *val);
++	return pmic->acpm->ops->pmic.read_reg(pmic->acpm, S2MPS_ACPM_CHAN, type, reg, pmic->sid, val);
++}
++
++static void s2mps_key(struct input_dev *in, unsigned int code, u8 irq, u8 press, u8 release)
++{
++	if (irq & press) {
++		input_report_key(in, code, 1);
++		input_sync(in);
++	}
++	if (irq & release) {
++		input_report_key(in, code, 0);
++		input_sync(in);
++	}
++}
++
++static irqreturn_t s2mps_keys_irq(int irq, void *data)
++{
++	struct s2mps_keys *k = data;
++	u8 ints[8];
++	int i;
++
++	writel(readl(k->pend_ap), k->pend_ap);
++	writel(readl(k->pend_pmu), k->pend_pmu);
++	if (!(readl(k->monitor) & VGPIO_IRQ_MAIN))
++		return IRQ_HANDLED;
++	for (i = 0; i < 8; i++)
++		if (s2mps_pm_rw(k->pmic, S2MPS_TYPE_PM1, S2MPS_INT1 + i, &ints[i], false))
++			ints[i] = 0;
++	s2mps_key(k->input, KEY_POWER, ints[0], S2MPS_PWRON_PRESS, S2MPS_PWRON_RELEASE);
++	s2mps_key(k->input, KEY_VOLUMEDOWN, ints[2], S2MPS_VOLDN_PRESS, S2MPS_VOLDN_RELEASE);
++	return IRQ_HANDLED;
++}
++
++static int s2mps_keys_init(struct device *dev, struct s2mps_acpm *pmic)
++{
++	struct s2mps_keys *k;
++	u8 v;
++	int irq, ret, i;
++
++	irq = of_irq_get(dev->of_node, 0);
++	if (irq <= 0)
++		return 0;	/* no keys on this PMIC */
++	k = devm_kzalloc(dev, sizeof(*k), GFP_KERNEL);
++	if (!k)
++		return -ENOMEM;
++	k->pmic = pmic;
++	k->monitor = devm_ioremap(dev, VGPIO_MONITOR, 4);
++	k->pend_ap = devm_ioremap(dev, VGPIO2AP_PEND, 4);
++	k->pend_pmu = devm_ioremap(dev, VGPIO2PMU_PEND, 4);
++	if (!k->monitor || !k->pend_ap || !k->pend_pmu)
++		return -ENOMEM;
++
++	k->input = devm_input_allocate_device(dev);
++	if (!k->input)
++		return -ENOMEM;
++	k->input->name = "s2mps25-keys";
++	k->input->phys = "s2mps25-keys/input0";
++	input_set_capability(k->input, EV_KEY, KEY_POWER);
++	input_set_capability(k->input, EV_KEY, KEY_VOLUMEDOWN);
++	ret = input_register_device(k->input);
++	if (ret)
++		return ret;
++
++	/* stale events out, then only the key interrupts unmasked */
++	for (i = 0; i < 8; i++)
++		s2mps_pm_rw(pmic, S2MPS_TYPE_PM1, S2MPS_INT1 + i, &v, false);
++	v = 0xff & ~(S2MPS_PWRON_PRESS | S2MPS_PWRON_RELEASE);
++	s2mps_pm_rw(pmic, S2MPS_TYPE_PM1, S2MPS_INT1M, &v, true);
++	v = 0xff & ~(S2MPS_VOLDN_PRESS | S2MPS_VOLDN_RELEASE);
++	s2mps_pm_rw(pmic, S2MPS_TYPE_PM1, S2MPS_INT3M, &v, true);
++	if (!s2mps_pm_rw(pmic, S2MPS_TYPE_PM2, S2MPS_PM2_OFF_CTRL1, &v, false)) {
++		v |= S2MPS_VOLDN_IRQ_EN;
++		s2mps_pm_rw(pmic, S2MPS_TYPE_PM2, S2MPS_PM2_OFF_CTRL1, &v, true);
++	}
++	if (!s2mps_pm_rw(pmic, S2MPS_TYPE_COM, S2MPS_COM_TX_MASK, &v, false)) {
++		v = (v & ~S2MPS_PM_IRQM) | S2MPS_IRQ_TX_EN;
++		s2mps_pm_rw(pmic, S2MPS_TYPE_COM, S2MPS_COM_TX_MASK, &v, true);
++	}
++
++	ret = devm_request_threaded_irq(dev, irq, NULL, s2mps_keys_irq, IRQF_ONESHOT,
++					"s2mps25-keys", k);
++	if (ret)
++		return ret;
++	device_init_wakeup(dev, true);
++	enable_irq_wake(irq);
++	dev_info(dev, "power and volume-down keys\n");
++	return 0;
++}
++
+ struct s2mps_acpm_data {
+ 	const struct regulator_desc *descs;
+ 	unsigned int num_descs;
+@@ -178,6 +308,7 @@ static int s2mps_acpm_probe(struct platform_device *pdev)
+ 	struct s2mps_acpm *pmic;
+ 	struct regmap *regmap;
+ 	unsigned int i;
++	int ret;
+ 
+ 	pmic = devm_kzalloc(dev, sizeof(*pmic), GFP_KERNEL);
+ 	if (!pmic)
+@@ -192,6 +323,10 @@ static int s2mps_acpm_probe(struct platform_device *pdev)
+ 	if (IS_ERR(regmap))
+ 		return PTR_ERR(regmap);
+ 
++	ret = s2mps_keys_init(dev, pmic);
++	if (ret)
++		dev_warn(dev, "keys: %d\n", ret);
++
+ 	regs_np = of_get_child_by_name(dev->of_node, "regulators");
+ 	if (!regs_np)
+ 		return 0;
+-- 
+2.56.1
+

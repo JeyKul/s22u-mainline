@@ -1,5 +1,9 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-27: power + volume-down keys
+- s2mps25-acpm: input "s2mps25-keys" from VGPIO IRQ (SPI 37); INT1 bit1/0 power press/release,
+  INT3 bit7/6 vol-down. powerdevil PowerButtonAction=ToggleScreenOnOff. Press not yet seen live.
+
 ## 2026-11-27: screen off/on (DPMS) works; Kinect check
 - Panel sleep needs Samsung's level keys around 28h/10h (and frames flowing while sent): verified
   black with the user's Kinect v2 (PC). DECON disable: panel off + TRIG_CON.HW_TRIG_MASK_DECON

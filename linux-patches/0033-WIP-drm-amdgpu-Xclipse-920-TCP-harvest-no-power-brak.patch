@@ -1,7 +1,7 @@
 From 1495f730e77677458270461567c0d521c6c5e454 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 16:50:45 +0100
-Subject: [PATCH 33/46] WIP: drm/amdgpu: Xclipse 920: TCP harvest, no power
+Subject: [PATCH 33/47] WIP: drm/amdgpu: Xclipse 920: TCP harvest, no power
  brake, no UTCL2 harvest
 
 As sgpu does on GC 10.4 (the UTCL2 harvest register moved to 0x16f7).
