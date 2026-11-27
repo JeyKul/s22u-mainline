@@ -122,6 +122,8 @@ else
 		mkdir -p /altroot && mount --bind "/newroot/$alt" /altroot
 		umount -l /newroot
 		mount --move /altroot /newroot
+	elif [ -n "$alt" ]; then
+		log "root: /$alt has no sbin/init ($(ls -l /newroot/$alt/sbin/init 2>&1)): using $root itself"
 	fi
 	log "switching to $root"
 	cp /tmp/dmesg.boot /newroot/var/log/dmesg.initramfs 2>/dev/null

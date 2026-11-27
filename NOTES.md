@@ -1,5 +1,13 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: ztOS boots (default now)
+- First ztOS boots froze ~1.5 s into systemd: udev autoloaded amdgpu before the G3D power-up (Arch has
+  /etc/modprobe.d/amdgpu-manual.conf, ztOS did not). Now in rootfs/overlay and the layer.
+- greetd -> ztMETRO up (Start screen), Wi-Fi connects, b0s-charge, xclipse-gpu active.
+- Layer bug fixed: `cp /etc/localtime` wrote through ztOS's absolute symlink into Arch's
+  /usr/share/zoneinfo/UTC (restored). Layer now copies the Arch SSH host keys (same known_hosts).
+- /.b0s-root = ztos on userdata; back to Arch: delete it from TWRP (adb shell rm /data/.b0s-root).
+
 ## 2026-11-28: BeamNG.drive (Windows ARM64) under Wine: starts, Vulkan on RADV, then GPU hang
 - `beamng` (rootfs overlay): Wine 11.23 aarch64, Wayland driver, `-gfx vk`. Reaches the Vulkan device,
   swapchain 1280x720, CEF UI processes; ~12 s later (game time, not uptime) the GFX ring hangs. Not
