@@ -1,7 +1,7 @@
 From 7da88a98579a05061816c2bb4e177776c1f59e26 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 21:52:32 +0100
-Subject: [PATCH 26/60] arm64: dts: exynos2200-b0s: GPU as an emulated PCI
+Subject: [PATCH 26/61] arm64: dts: exynos2200-b0s: GPU as an emulated PCI
  function
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

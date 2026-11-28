@@ -1,5 +1,16 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: Bluetooth UART up, BCM4389C1 answers; patch download stalls
+- UART1 @0x10840000 (PERIC1 UART_BT, SPI 674, gs101-uart compat, 256 FIFO). USI_CON (0xc4) resets
+  to 1 = UART in reset: all probe-time writes lost (UFCON without FIFO mode -> every RX byte read
+  over and over, "04 04 04 .." in btmon). samsung_tty: samsung,usi-v2-reset clears it (+USI_OPTION 2).
+- hci_uart_bcm: reset, version (BCM4389C1, 003.002.009), local name, Download Minidriver (fc2e) all
+  answered. The first Write RAM (fc4c, 8 bytes to 0x2c23e8) never gets a reply, at 115200 and 3M,
+  with semco or cob .hcd (same headers), with 500 ms after fc2e. CTS asserted, no RX at all.
+- Next: what Samsung's BT HAL does around fc2e for 4389 (secure/OTP download? different baud
+  after minidriver?); firmware in /usr/lib/firmware/brcm/{BCM,BCM4389C1}.hcd from vendor.
+- 100 W charger: 9 V PD negotiated, ~2.2 A into the battery, thermal ramp from 38 C works.
+
 ## 2026-11-28: thermistors, charge control, Waydroid kernel, Wi-Fi SSH
 - S2MPS25 GPADC over ACPM ch 11 (8-byte msgs; 16 bytes -> -EINVAL): battery ch14, charger ch4,
   USB ch13 as generic-adc-thermal zones with Samsung's tables (battery-/charger-/usb-thermal).

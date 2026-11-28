@@ -1,0 +1,81 @@
+From e006c5faac08471c61e88c148fa2325e24f11f94 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:21:33 +0100
+Subject: [PATCH 61/61] tty: samsung: release the USI v2 reset of UARTs without
+ a USI node; b0s BT UART
+
+Exynos 2200's UART_BT has the USI v2 wrapper but no USI parent: USI_CON
+resets to 1 and holds the UART in reset, so every register write at probe
+was lost (no FIFO mode: each RX byte read repeatedly). The new
+samsung,usi-v2-reset property releases it before the port is set up.
+
+b0s: UART1 (0x10840000) with the BCM4389 Bluetooth core.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 29 +++++++++++++++++++
+ drivers/tty/serial/samsung_tty.c              | 11 +++++++
+ 2 files changed, 40 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 88c8f4781..36fe8c577 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -1039,3 +1039,32 @@ usb-thermal {
+ 
+ 	};
+ };
++
++/*
++ * Bluetooth: BCM4389 on UART1 (PERIC1 "UART_BT", 4-wire). BT_REG_ON is S2MPS26 GPIO 17,
++ * BT_WAKE gpc8-1, host wake gpa0-3 (Samsung's bcm43xx node).
++ */
++&{/soc@0} {
++	serial_1: serial@10840000 {
++		compatible = "samsung,exynos2200-uart", "google,gs101-uart";
++		reg = <0x10840000 0x100>;
++		clocks = <&cmu_peric1 CLK_MOUT_PERIC1_NOC_USER>,
++			 <&cmu_peric1 CLK_DOUT_PERIC1_UART_BT>;
++		clock-names = "uart", "clk_uart_baud0";
++		interrupts = <GIC_SPI 674 IRQ_TYPE_LEVEL_HIGH 0>;
++		pinctrl-0 = <&uart1_bus>;
++		pinctrl-names = "default";
++		samsung,uart-fifosize = <256>;
++		samsung,usi-v2-reset;
++
++		bluetooth {
++			compatible = "brcm,bcm4345c5";
++			shutdown-gpios = <&s2mps26 17 GPIO_ACTIVE_HIGH>;
++			device-wakeup-gpios = <&gpc8 1 GPIO_ACTIVE_HIGH>;
++			interrupt-parent = <&gpa0>;
++			interrupts = <3 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "host-wakeup";
++			max-speed = <115200>;
++		};
++	};
++};
+diff --git a/drivers/tty/serial/samsung_tty.c b/drivers/tty/serial/samsung_tty.c
+index 63d0232df..b2539aedc 100644
+--- a/drivers/tty/serial/samsung_tty.c
++++ b/drivers/tty/serial/samsung_tty.c
+@@ -1885,6 +1885,17 @@ static int s3c24xx_serial_init_port(struct s3c24xx_uart_port *ourport,
+ 	if (ret)
+ 		pr_warn("uart: failed to enable baudclk\n");
+ 
++	/*
++	 * A UART with the USI v2 wrapper but no USI node (Exynos 2200 UART_BT):
++	 * USI_CON resets to 1, holding the UART in reset, and every register
++	 * write below would be lost. Release it here, as the USI driver would.
++	 */
++	if (of_property_read_bool(platdev->dev.of_node, "samsung,usi-v2-reset")) {
++		wr_regl(port, 0xc4, 0);		/* USI_CON: out of reset */
++		udelay(1);
++		wr_regl(port, 0xc8, BIT(1));	/* USI_OPTION: HWACG CLKREQ_ON */
++	}
++
+ 	/* Keep all interrupts masked and cleared */
+ 	switch (ourport->info->type) {
+ 	case TYPE_S3C6400:
+-- 
+2.56.1
+

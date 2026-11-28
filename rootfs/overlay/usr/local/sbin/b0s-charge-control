@@ -129,7 +129,7 @@ def main():
             new = want if cur is None or want < cur else min(want, cur + STEP_UP)
             if new != cur:
                 open(CH + 'constant_charge_current', 'w').write(str(max(new, 100) * 1000))
-                if cur is None or abs(new - cur) >= 200 or new == want:
+                if cur is None or abs(new - cur) >= 200 or new == 0:
                     log('charge current %d mA' % new)
                 cur = new
         was = online

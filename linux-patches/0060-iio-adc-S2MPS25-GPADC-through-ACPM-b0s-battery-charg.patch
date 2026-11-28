@@ -1,7 +1,7 @@
 From 9ca4d405af45b5ba0c1cb4f8d19f99a75d57f071 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 01:03:09 +0100
-Subject: [PATCH 60/60] iio: adc: S2MPS25 GPADC through ACPM; b0s
+Subject: [PATCH 60/61] iio: adc: S2MPS25 GPADC through ACPM; b0s
  battery/charger/USB thermistors
 
 ACPM channel 11 reads the PMIC's ADC (8-byte messages, cmd[1] = channel,
