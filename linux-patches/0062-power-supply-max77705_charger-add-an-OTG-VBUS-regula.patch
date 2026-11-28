@@ -1,7 +1,7 @@
 From 4a7142839509b1d7a207d9ded36a2d49c693ae0d Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Sat, 7 Nov 2026 14:03:42 +0100
-Subject: [PATCH 62/64] power: supply: max77705_charger: add an OTG VBUS
+Subject: [PATCH 62/66] power: supply: max77705_charger: add an OTG VBUS
  regulator
 
 Add the OTG boost as a regulator, usb-otg-vbus. Enabling it ORs the boost

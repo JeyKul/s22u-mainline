@@ -1,0 +1,77 @@
+From 4cbed50705f8f1cd32822501c861afc845cb77b6 Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:50:28 +0100
+Subject: [PATCH 66/66] usb: typec: max77705: DP alt mode without a redriver;
+ b0s DP AUX switch
+
+Enable the DisplayPort flow when the connector has only the SBU (AUX) port:
+the S22 Ultra's SuperSpeed lanes go straight to the USBDP PHY. b0s: the
+AUX switch is a gpio-sbu-mux on S2MPS26 GPIO 0 (enable, low) and 1.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 28 +++++++++++++++++++
+ drivers/usb/typec/max77705_usbc.c             |  3 ++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 9256eb38c..90e863d14 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -131,6 +131,14 @@ max77705_typec_hs: endpoint {
+ 							remote-endpoint = <&usb_dwc3_hs>;
+ 						};
+ 					};
++
++					port@2 {
++						reg = <2>;
++
++						max77705_typec_sbu: endpoint {
++							remote-endpoint = <&dp_aux_switch_in>;
++						};
++					};
+ 				};
+ 			};
+ 		};
+@@ -1131,3 +1139,23 @@ bluetooth {
+ 		};
+ 	};
+ };
++
++/ {
++	/*
++	 * DP AUX to the plug (Samsung's dp,aux_sw_oe / dp,sbu_sw_sel): S2MPS26 GPIO 0 enables
++	 * (active low), GPIO 1 picks the CC side.
++	 */
++	dp-aux-switch {
++		compatible = "gpio-sbu-mux";
++		enable-gpios = <&s2mps26 0 GPIO_ACTIVE_LOW>;
++		select-gpios = <&s2mps26 1 GPIO_ACTIVE_HIGH>;
++		mode-switch;
++		orientation-switch;
++
++		port {
++			dp_aux_switch_in: endpoint {
++				remote-endpoint = <&max77705_typec_sbu>;
++			};
++		};
++	};
++};
+diff --git a/drivers/usb/typec/max77705_usbc.c b/drivers/usb/typec/max77705_usbc.c
+index 4d0eecf77..3c7e9516b 100644
+--- a/drivers/usb/typec/max77705_usbc.c
++++ b/drivers/usb/typec/max77705_usbc.c
+@@ -2174,7 +2174,10 @@ static int max77705_usbc_probe(struct i2c_client *client)
+ 	if (IS_ENABLED(CONFIG_DRM_AUX_HPD_BRIDGE)) {
+ 		struct fwnode_handle *ep;
+ 
++		/* SS lanes through a redriver (port 1) or straight to the PHY, AUX on port 2 */
+ 		ep = fwnode_graph_get_endpoint_by_id(connector, 1, 0, 0);
++		if (!ep)
++			ep = fwnode_graph_get_endpoint_by_id(connector, 2, 0, 0);
+ 		if (ep) {
+ 			fwnode_handle_put(ep);
+ 
+-- 
+2.56.1
+

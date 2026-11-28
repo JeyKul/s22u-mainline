@@ -1,7 +1,7 @@
 From b943f42ff49f71790d1f536feaf459d8f11b542c Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 17:30:39 +0100
-Subject: [PATCH 37/64] WIP: drm/amdgpu: Xclipse 920: busy and quiesce hooks
+Subject: [PATCH 37/66] WIP: drm/amdgpu: Xclipse 920: busy and quiesce hooks
  for the G3D DVFS governor
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

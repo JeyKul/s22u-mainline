@@ -1,5 +1,14 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: HDMI goal, step 1: DP alt mode entered
+- Tablet patch 0056 (max77705 DP alt mode) + port 2 (SBU) is enough to enable it (no redriver).
+  AUX switch: gpio-sbu-mux, S2MPS26 GPIO 0 (OE, low) / GPIO 1 (sel) (Samsung dp,aux_sw_oe/sbu_sw_sel;
+  dp,usb_con_sel = gpc7-1 orientation from the PHY).
+- USB-C HDMI hub: 9 V contract, "DP: mode VDO 0x00000c05, pins 0x0c", pin D, CC1, HPD high.
+- Next: USBDP PHY in DP mode (0x10ad0000 ctrl, 0x10ae0000 TCA; hacen 0006/0008 + Samsung
+  dp_reg.c phy_*), DP link at 0x10a80000 (SPI 479, HSI0), AUX -> EDID, then DECON1/2 video.
+- Wi-Fi from the phone is nearly unusable for transfers (RTT ~1 s); USB for anything bigger.
+
 ## 2026-11-28: MAX77705 MFD + CCIC (Type-C) from the Tab S7+
 - Tablet patches 0052 (charger OTG VBUS regulator) and 0053 (max77705_usbc) applied cleanly.
 - The S22U's MAX77705 is PASS2 (rev 0x2); the mainline MFD only took PASS3 -> accepted.

@@ -1,7 +1,7 @@
 From af2758b9d9925596d6d719c2ded891996800fa4c Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 01:26:08 +0100
-Subject: [PATCH 64/64] b0s: MAX77705 as MFD with the CCIC (max77705_usbc) and
+Subject: [PATCH 64/66] b0s: MAX77705 as MFD with the CCIC (max77705_usbc) and
  OTG VBUS
 
 The S22 Ultra's MAX77705 is revision PASS2: accept it in the MFD. Charger and

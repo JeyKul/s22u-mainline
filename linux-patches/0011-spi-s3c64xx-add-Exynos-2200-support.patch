@@ -1,7 +1,7 @@
 From 6f6348917d7c0a118a079b0451e9e32dac9c6c70 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:19:06 +0100
-Subject: [PATCH 11/64] spi: s3c64xx: add Exynos 2200 support
+Subject: [PATCH 11/66] spi: s3c64xx: add Exynos 2200 support
 
 Like gs101 (32-bit FIFO access, clock from the CMU), but the FIFO depth
 differs between USI instances (256 bytes on USI02, 64 on others), so it

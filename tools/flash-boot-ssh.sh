@@ -4,7 +4,7 @@
 set -euo pipefail
 TOP=$(cd "$(dirname "$0")/.." && pwd)
 IMG=${1:-$TOP/out/boot.img}
-SSH=(ssh -F "$TOP/tools/ssh_config" b0s)
+SSH=(ssh -F "$TOP/tools/ssh_config" "${B0S_HOST:-b0s}")
 
 [ "$(head -c 8 "$IMG")" = "ANDROID!" ] || { echo "$IMG is not a boot image"; exit 1; }
 [ "$(stat -c%s "$IMG")" -le 67108864 ] || { echo "$IMG is larger than boot"; exit 1; }

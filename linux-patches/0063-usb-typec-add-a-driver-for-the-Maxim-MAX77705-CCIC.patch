@@ -1,7 +1,7 @@
 From 925c247bf1dc8516d7a0354597decfcb6e2d0dc8 Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Sat, 7 Nov 2026 14:03:42 +0100
-Subject: [PATCH 63/64] usb: typec: add a driver for the Maxim MAX77705 CCIC
+Subject: [PATCH 63/66] usb: typec: add a driver for the Maxim MAX77705 CCIC
 
 Port the max77705-usbc driver from the Galaxy Tab S8+ mainline port
 (aaronsb/sm-x800-linux 6f3248548258: max77705-typec, -source-attach,
