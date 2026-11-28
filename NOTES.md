@@ -7,7 +7,8 @@
   source 3, connector graph to dwc3 (otg, role switch, default peripheral).
 - max77705_usbc: CCIC hw 0x1a fw 6E.00, port0 device/sink, 5 V 1.5 A on the dock; USB gadget kept.
 - b0s-charge-control: kernel_pd mode when max77705-usbc exists (thermal throttling only).
-- To test: OTG with a USB stick (host role), PD charger through the kernel driver.
+- Tested 2026-11-28: USB stick via a powered hub -> xhci, sdf 64 GB; the hub's PD gave a 9 V 2.11 A
+  contract in host role (VBUS guard turned our boost off when the source appeared).
 
 ## 2026-11-28: Bluetooth UART up, BCM4389C1 answers; patch download stalls
 - UART1 @0x10840000 (PERIC1 UART_BT, SPI 674, gs101-uart compat, 256 FIFO). USI_CON (0xc4) resets
