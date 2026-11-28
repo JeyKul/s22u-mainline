@@ -31,7 +31,7 @@ minimum target: GPU, display, HDMI.
 | Back to TWRP | ✅ | `twrp`, `reboot recovery`, Volume Up held 2 s |
 | Volume Up | ✅ | GPIO key |
 | Power, Volume Down | ✅ | PMIC keys via the VGPIO interrupt; power toggles the screen |
-| Battery, charging: MAX77705 + fuel gauge | ✅ | Fuel gauge (max17042, i2c-gpio): level, voltage, current. Charger: mainline max77705-charger (online/status/health, interrupt on gpa0-0); b0s-charge.service sets 1.5 A input / 1.5 A charge (~1.3 A into the battery). No USB-PD/fast charging yet |
+| Battery, charging: MAX77705 + fuel gauge | ✅ | Fuel gauge (max17042), charger (max77705-charger under the MFD), USB-PD 9 V through max77705_usbc (~2.2 A into the battery on a PD charger), `b0s-charge-control`: thermal ramps from the battery/charger thermistors (S2MPS25 GPADC) |
 | Vibration | ⬜ | |
 | Suspend | ⬜ | |
 
@@ -53,7 +53,7 @@ minimum target: GPU, display, HDMI.
 | Hardware | State | Notes |
 |---|---|---|
 | USB gadget (serial, network) | ✅ | Root shell on the ACM serial; SSH over NCM at 172.16.42.1 (PC gets .2 by DHCP) |
-| USB 3, USB host (OTG) | ⬜ | hacen's USBDP patches; role switch from MAX77705 |
+| USB 3, USB host (OTG) | 🟡 | MAX77705 CCIC driver (`max77705_usbc`, from the Tab S7+ port): Type-C roles, PD sink up to 9 V, OTG VBUS regulator, dwc3 role switch. Host mode not tested with a device yet; USB 3 not started |
 | Audio: CS35L41 speakers, ABOX DSP | ⬜ | |
 | Wi-Fi / BT: Broadcom BCM4389 (PCIe) | 🟡 | Wi-Fi works: own PCIe driver (`pcie-exynos2200`) + brcmfmac with BCM4389 support, NetworkManager. Firmware from the vendor partition (`tools/install-wifi-fw.sh`). Firmware asserts every few minutes; the driver reloads it. BT: no |
 | Modem, GNSS, NFC, cameras, sensors | ⬜ | |

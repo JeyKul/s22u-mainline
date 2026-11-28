@@ -6,6 +6,7 @@
 import fcntl, glob, os, time
 CH = '/sys/class/power_supply/max77705-charger/'
 BA = '/sys/class/power_supply/max170xx_battery/'
+UC = '/sys/class/power_supply/max77705-usbc/'      # max77705_usbc: the kernel owns PD
 SAFE_IN, SAFE_CC = 1500000, 1500000     # 5 V: AICL lowers the input on weak ports
 FAST_IN, FAST_CC = 1650000, 2650000     # 9 V: ~15 W
 FLOOR, COLD_CAP, STEP_UP = 500, 1000, 100   # mA
@@ -94,11 +95,40 @@ def log(m):
         int(rs(BA + 'current_now')) // 1000, rs(BA + 'capacity'), rs(CH + 'status')), flush=True)
 
 
+def kernel_pd():
+    """max77705_usbc negotiates the contract: thermal throttling of the charge current only.
+    Plugged in comes from its supply (the charger also reads online on our own OTG boost)."""
+    th = Thermal(); cur = None; was = None
+    while True:
+        try:
+            online = rs(UC + 'online') == '1'
+            mv = int(rs(UC + 'voltage_now')) // 1000
+        except (OSError, ValueError):
+            time.sleep(3); continue
+        b, c = temps()
+        if not online:
+            if was: log('unplugged')
+            cur = None; was = online; time.sleep(3); continue
+        want = th.limit(b, c, (FAST_CC if mv >= 9000 else SAFE_CC) // 1000)
+        new = want if cur is None or want < cur else min(want, cur + STEP_UP)
+        if new != cur:
+            open(CH + 'constant_charge_current', 'w').write(str(max(new, 100) * 1000))
+            if cur is None or abs(new - cur) >= 200 or new == 0:
+                log('charge current %d mA (%d mV in)' % (new, mv))
+            cur = new
+        was = online
+        time.sleep(3)
+
+
 def main():
+    if os.path.isdir(UC):
+        return kernel_pd()
     f = mbox(); th = Thermal()
     fast = False; was = None; retry = 0; cur = None
     setlim(SAFE_IN, SAFE_CC)
     while True:
+        if os.path.isdir(UC):
+            os.close(f); return kernel_pd()
         online = rs(CH + 'online') == '1'
         b, c = temps()
         if not online:

@@ -1,7 +1,7 @@
 From 5d7ec9e85287164bf79f310fe059634d5b684d73 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 20:17:03 +0100
-Subject: [PATCH 52/61] PCI: exynos2200: S2MPU restore, Samsung's WLAN power-on
+Subject: [PATCH 52/64] PCI: exynos2200: S2MPU restore, Samsung's WLAN power-on
  delay
 
 After the HSI1 domain comes up its S2MPU blocks device DMA until EL2

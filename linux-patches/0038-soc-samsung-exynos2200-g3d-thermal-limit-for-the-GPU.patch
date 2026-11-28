@@ -1,7 +1,7 @@
 From 7e63c342dfe88954cb369d041c4bd0a534af9e0b Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 19:43:59 +0100
-Subject: [PATCH 38/61] soc: samsung: exynos2200-g3d: thermal limit for the GPU
+Subject: [PATCH 38/64] soc: samsung: exynos2200-g3d: thermal limit for the GPU
  governor; PCI subsystem 144d:0920
 
 The governor reads the G3D temperature from Samsung's TMU through ACPM

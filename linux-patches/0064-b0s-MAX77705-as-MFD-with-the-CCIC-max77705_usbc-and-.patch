@@ -1,0 +1,173 @@
+From af2758b9d9925596d6d719c2ded891996800fa4c Mon Sep 17 00:00:00 2001
+From: JeyKul <77121325+JeyKul@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:26:08 +0100
+Subject: [PATCH 64/64] b0s: MAX77705 as MFD with the CCIC (max77705_usbc) and
+ OTG VBUS
+
+The S22 Ultra's MAX77705 is revision PASS2: accept it in the MFD. Charger and
+the Type-C driver (from the Tab S7+ port) hang off its interrupt controller
+(gpa0-0); the charger's standalone masking only runs without the MFD.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/exynos/exynos2200-b0s.dts | 71 +++++++++++++++++--
+ drivers/mfd/max77705.c                        |  3 +-
+ drivers/power/supply/max77705_charger.c       | 10 ++-
+ 3 files changed, 77 insertions(+), 7 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+index 36fe8c577..9256eb38c 100644
+--- a/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
++++ b/arch/arm64/boot/dts/exynos/exynos2200-b0s.dts
+@@ -16,6 +16,7 @@
+ #include <dt-bindings/interrupt-controller/irq.h>
+ #include <dt-bindings/soc/samsung,exynos-usi.h>
+ #include <dt-bindings/thermal/thermal.h>
++#include <dt-bindings/usb/pd.h>
+ 
+ / {
+ 	model = "Samsung Galaxy S22 Ultra (SM-S908B)";
+@@ -67,15 +68,71 @@ fuel-gauge@36 {
+ 			maxim,rsns-microohm = <2000>;	/* Samsung: fg_resistor 5 = 2 mOhm */
+ 		};
+ 
+-		/* MAX77705 charger; its interrupt is the whole chip's (gpa0-0, Samsung max77705,irq-gpio) */
+-		charger@69 {
+-			compatible = "maxim,max77705-charger";
+-			reg = <0x69>;
++		/* MAX77705 top level: one interrupt line for charger, fuel gauge and CCIC (gpa0-0) */
++		max77705: pmic@66 {
++			compatible = "maxim,max77705";
++			reg = <0x66>;
+ 			interrupt-parent = <&gpa0>;
+ 			interrupts = <0 IRQ_TYPE_LEVEL_LOW>;
+ 			pinctrl-0 = <&chg_irq>;
+ 			pinctrl-names = "default";
++			interrupt-controller;
++			#interrupt-cells = <1>;
++		};
++
++		max77705_charger: charger@69 {
++			compatible = "maxim,max77705-charger";
++			reg = <0x69>;
++			interrupt-parent = <&max77705>;
++			interrupts = <0>;
+ 			monitored-battery = <&battery>;
++
++			max77705_otg_vbus: usb-otg-vbus {
++				regulator-name = "usb-otg-vbus";
++				regulator-min-microvolt = <5000000>;
++				regulator-max-microvolt = <5000000>;
++			};
++		};
++
++		/*
++		 * MAX77705 CCIC (from the Tab S7+ port): CC, PD and the D+/D- switch run in its
++		 * firmware behind the mailbox at 0x25; max77705_usbc sets dwc3's role and VBUS.
++		 * Until it loads dwc3 stays a peripheral (USB gadget).
++		 */
++		typec@25 {
++			compatible = "maxim,max77705-usbc";
++			reg = <0x25>;
++			interrupt-parent = <&max77705>;
++			interrupts = <3>;
++			vbus-supply = <&max77705_otg_vbus>;
++			maxim,charger = <&max77705_charger>;
++
++			connector {
++				compatible = "usb-c-connector";
++				label = "USB-C";
++				power-role = "dual";
++				data-role = "dual";
++				try-power-role = "sink";
++				sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_DUAL_ROLE |
++							PDO_FIXED_HIGHER_CAP |
++							PDO_FIXED_USB_COMM |
++							PDO_FIXED_DATA_SWAP)
++					     PDO_FIXED(9000, 1650, 0)>;
++				op-sink-microwatt = <14850000>;
++
++				ports {
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					port@0 {
++						reg = <0>;
++
++						max77705_typec_hs: endpoint {
++							remote-endpoint = <&usb_dwc3_hs>;
++						};
++					};
++				};
++			};
+ 		};
+ 	};
+ 
+@@ -780,6 +837,12 @@ &usb_dwc3 {
+ 	usb-role-switch;
+ 	role-switch-default-mode = "peripheral";
+ 	maximum-speed = "high-speed";
++
++	port {
++		usb_dwc3_hs: endpoint {
++			remote-endpoint = <&max77705_typec_hs>;
++		};
++	};
+ };
+ 
+ &usb_hsphy {
+diff --git a/drivers/mfd/max77705.c b/drivers/mfd/max77705.c
+index e98c76d6b..def36dae7 100644
+--- a/drivers/mfd/max77705.c
++++ b/drivers/mfd/max77705.c
+@@ -105,7 +105,8 @@ static int max77705_i2c_probe(struct i2c_client *i2c)
+ 		return -ENODEV;
+ 
+ 	pmic_rev = pmic_rev_value & MAX77705_REVISION_MASK;
+-	if (pmic_rev != MAX77705_PASS3)
++	/* PASS2 (Galaxy S22 Ultra) behaves the same here; Samsung's driver runs both */
++	if (pmic_rev != MAX77705_PASS3 && pmic_rev != MAX77705_PASS2)
+ 		return dev_err_probe(dev, -ENODEV, "Rev.0x%x is not tested\n", pmic_rev);
+ 
+ 	/* Active Discharge Enable */
+diff --git a/drivers/power/supply/max77705_charger.c b/drivers/power/supply/max77705_charger.c
+index 4b1ad08a1..b76f99d19 100644
+--- a/drivers/power/supply/max77705_charger.c
++++ b/drivers/power/supply/max77705_charger.c
+@@ -15,6 +15,7 @@
+ #include <linux/power/max77705_charger.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_irq.h>
+ #include <linux/platform_device.h>
+ #include <linux/power_supply.h>
+ #include <linux/regmap.h>
+@@ -689,6 +690,8 @@ static int max77705_charger_probe(struct i2c_client *i2c)
+ 	struct regmap_irq_chip *chip_desc;
+ 	struct device *dev;
+ 	struct regmap_irq_chip_data *irq_data;
++	struct device_node *irq_parent;
++	bool under_mfd;
+ 	int ret;
+ 
+ 	dev = &i2c->dev;
+@@ -701,11 +704,14 @@ static int max77705_charger_probe(struct i2c_client *i2c)
+ 	i2c_set_clientdata(i2c, chg);
+ 
+ 	/*
+-	 * Without the MFD driver nobody services the other interrupt sources, and a
++	 * Without the MFD (interrupt parent) nobody services the other sources, and a
+ 	 * pending one (USB-C after boot) holds the shared line low: let only the
+ 	 * charger through the top-level mask.
+ 	 */
+-	if (!of_device_is_compatible(dev->parent->of_node, "maxim,max77705")) {
++	irq_parent = of_irq_find_parent(dev->of_node);
++	under_mfd = of_device_is_compatible(irq_parent, "maxim,max77705");
++	of_node_put(irq_parent);
++	if (!under_mfd) {
+ 		struct i2c_client *top = i2c_new_dummy_device(i2c->adapter, 0x66);
+ 
+ 		if (!IS_ERR(top)) {
+-- 
+2.56.1
+

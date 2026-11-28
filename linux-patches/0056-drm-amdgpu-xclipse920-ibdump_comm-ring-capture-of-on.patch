@@ -1,7 +1,7 @@
 From bb58169a16d0a41ea5e71482ae10d4ed867928fa Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 00:11:48 +0100
-Subject: [PATCH 56/61] drm/amdgpu: xclipse920: ibdump_comm, ring capture of
+Subject: [PATCH 56/64] drm/amdgpu: xclipse920: ibdump_comm, ring capture of
  one process's last 64 submissions
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

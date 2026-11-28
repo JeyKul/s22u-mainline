@@ -1,7 +1,7 @@
 From 64330d4d0759ae33038963700d28ae76b6e1a26a Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 00:33:05 +0100
-Subject: [PATCH 57/61] power: max77705: charger on b0s without the MFD; fix
+Subject: [PATCH 57/64] power: max77705: charger on b0s without the MFD; fix
  input limit setter
 
 The S22 Ultra's MAX77705 charger runs as a standalone I2C device (gpa0-0

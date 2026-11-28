@@ -1,7 +1,7 @@
 From 1868bce759533fb8fa2c4ff0c8380ad52541d40e Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 00:34:36 +0100
-Subject: [PATCH 58/61] Input: stm-fts-spi: keep resting fingers, split
+Subject: [PATCH 58/64] Input: stm-fts-spi: keep resting fingers, split
  lift+touch of one slot
 
 The firmware reports only changes, so INPUT_MT_DROP_UNUSED lifted fingers

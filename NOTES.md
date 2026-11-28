@@ -1,5 +1,14 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: MAX77705 MFD + CCIC (Type-C) from the Tab S7+
+- Tablet patches 0052 (charger OTG VBUS regulator) and 0053 (max77705_usbc) applied cleanly.
+- The S22U's MAX77705 is PASS2 (rev 0x2); the mainline MFD only took PASS3 -> accepted.
+- DT: pmic@66 (IRQ gpa0-0 low, interrupt-controller), charger@69 on source 0, typec@25 on
+  source 3, connector graph to dwc3 (otg, role switch, default peripheral).
+- max77705_usbc: CCIC hw 0x1a fw 6E.00, port0 device/sink, 5 V 1.5 A on the dock; USB gadget kept.
+- b0s-charge-control: kernel_pd mode when max77705-usbc exists (thermal throttling only).
+- To test: OTG with a USB stick (host role), PD charger through the kernel driver.
+
 ## 2026-11-28: Bluetooth UART up, BCM4389C1 answers; patch download stalls
 - UART1 @0x10840000 (PERIC1 UART_BT, SPI 674, gs101-uart compat, 256 FIFO). USI_CON (0xc4) resets
   to 1 = UART in reset: all probe-time writes lost (UFCON without FIFO mode -> every RX byte read

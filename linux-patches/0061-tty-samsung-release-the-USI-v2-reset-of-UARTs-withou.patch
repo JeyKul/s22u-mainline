@@ -1,7 +1,7 @@
 From e006c5faac08471c61e88c148fa2325e24f11f94 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 01:21:33 +0100
-Subject: [PATCH 61/61] tty: samsung: release the USI v2 reset of UARTs without
+Subject: [PATCH 61/64] tty: samsung: release the USI v2 reset of UARTs without
  a USI node; b0s BT UART
 
 Exynos 2200's UART_BT has the USI v2 wrapper but no USI parent: USI_CON
