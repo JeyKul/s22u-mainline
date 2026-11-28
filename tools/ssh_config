@@ -6,3 +6,11 @@ Host b0s
 	StrictHostKeyChecking accept-new
 	UserKnownHostsFile ~/.ssh/b0s_known_hosts
 	ConnectTimeout 5
+
+# same phone over Wi-Fi (address from the FRITZ!Box DHCP)
+Host b0s-wifi
+	HostName 192.168.0.143
+	User root
+	IdentityFile ~/.ssh/b0s_claude
+	UserKnownHostsFile ~/.ssh/b0s_known_hosts
+	HostKeyAlias 172.16.42.1

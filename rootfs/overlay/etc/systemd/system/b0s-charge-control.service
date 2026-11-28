@@ -1,0 +1,11 @@
+[Unit]
+Description=Charging control (limits, 9 V USB-PD, thermal throttling)
+
+[Service]
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/bin/python3 /usr/local/sbin/b0s-charge-control
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

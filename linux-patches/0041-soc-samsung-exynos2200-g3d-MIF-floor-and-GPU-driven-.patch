@@ -1,7 +1,7 @@
 From 1fa95f19d471dc7332b920898e77a6693ebd9e70 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:12:35 +0100
-Subject: [PATCH 41/59] soc: samsung: exynos2200-g3d: MIF floor and GPU-driven
+Subject: [PATCH 41/60] soc: samsung: exynos2200-g3d: MIF floor and GPU-driven
  MIF levels; TMU zone readout
 
 S-Boot leaves the memory clock at 3172 MHz (743 mV). The GPU governor now keeps

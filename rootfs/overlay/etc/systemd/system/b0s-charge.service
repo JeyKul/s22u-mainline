@@ -1,9 +1,0 @@
-[Unit]
-Description=MAX77705 charger input/charge current limits
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/b0s-charge
-
-[Install]
-WantedBy=multi-user.target

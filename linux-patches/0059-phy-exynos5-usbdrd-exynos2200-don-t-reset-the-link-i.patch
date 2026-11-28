@@ -1,7 +1,7 @@
 From 57baf1ca36ae9509f4de0696ea76af109ca52ef9 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Sat, 28 Nov 2026 00:42:20 +0100
-Subject: [PATCH 59/59] phy: exynos5-usbdrd: exynos2200: don't reset the link
+Subject: [PATCH 59/60] phy: exynos5-usbdrd: exynos2200: don't reset the link
  in phy_exit
 
 On system resume dwc3 programs GUSB2PHYCFG before phy_init() releases

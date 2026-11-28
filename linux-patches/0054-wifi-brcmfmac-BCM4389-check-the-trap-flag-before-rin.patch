@@ -1,7 +1,7 @@
 From 2aaa1edb48b38ff5bcf68676265c70479236e479 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 20:39:43 +0100
-Subject: [PATCH 54/59] wifi: brcmfmac: BCM4389: check the trap flag before
+Subject: [PATCH 54/60] wifi: brcmfmac: BCM4389: check the trap flag before
  ringing the doorbell
 
 The check described in the BCM4389 commit was lost; with it a firmware

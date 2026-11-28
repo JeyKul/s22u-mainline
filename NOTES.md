@@ -1,5 +1,18 @@
 # b0s mainline notes (newest first)
 
+## 2026-11-28: thermistors, charge control, Waydroid kernel, Wi-Fi SSH
+- S2MPS25 GPADC over ACPM ch 11 (8-byte msgs; 16 bytes -> -EINVAL): battery ch14, charger ch4,
+  USB ch13 as generic-adc-thermal zones with Samsung's tables (battery-/charger-/usb-thermal).
+  Charging at 1.3 A: batt 37, chg 43, usb 36 C. Fuel gauge TEMP register is static (not fed).
+- b0s-charge-control (from gts7xl-charge-control): 1.5 A/1.5 A at 5 V, 9 V PD via the MAX77705
+  mailbox (I2C 0x25) when offered (dock: 0 PDOs), Samsung thermal ramps (batt 38-45/stop 50,
+  chg 60-75/stop 80). Not After=multi-user (Waydroid image download holds that target).
+- Waydroid kernel set from the Tab S7+ config (binder, PSI, policy routing, netfilter);
+  ztos-waydroid-images downloading. Layer keeps Waydroid enabled.
+- Wi-Fi SSH: `ssh -F tools/ssh_config b0s-wifi` (FRITZ!Box KulHome 5 GHz; the 2.4 GHz
+  "KulHome" SSID could not reach it). A failed `nmcli dev wifi connect` left brcmfmac in a
+  console-read loop with no netdev (rmmod impossible): rebooted.
+
 ## 2026-11-28: suspend groundwork (paused)
 - PM_DEBUG on. pm_test devices (s2idle): brcmfmac D3 entry times out (unload it around sleep);
   dwc3 resume SError'd: exynos2200 phy_exit asserted LINK_SW_RST, dwc3 writes link regs before

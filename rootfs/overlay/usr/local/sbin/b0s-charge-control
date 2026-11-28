@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+# Charging control for the S22 Ultra (from the Tab S7+ port's gts7xl-charge-control, same MAX77705):
+# input/charge limits, 9 V USB-PD through the MAX77705 mailbox (I2C 0x25) when the source offers
+# it, and thermal throttling of the battery current from the battery and charger thermistors
+# (S2MPS25 GPADC thermal zones; the fuel gauge's own temperature register is not fed here).
+import fcntl, glob, os, time
+CH = '/sys/class/power_supply/max77705-charger/'
+BA = '/sys/class/power_supply/max170xx_battery/'
+SAFE_IN, SAFE_CC = 1500000, 1500000     # 5 V: AICL lowers the input on weak ports
+FAST_IN, FAST_CC = 1650000, 2650000     # 9 V: ~15 W
+FLOOR, COLD_CAP, STEP_UP = 500, 1000, 100   # mA
+FAKE = '/run/b0s-charge-control/fake'   # test only: battery temperature in C
+
+
+def rs(p): return open(p).read().strip()
+
+
+def setlim(inp, cc):
+    open(CH + 'input_current_limit', 'w').write(str(inp))
+    open(CH + 'constant_charge_current', 'w').write(str(max(cc, 100000)))
+
+
+def zone(name):
+    for z in glob.glob('/sys/class/thermal/thermal_zone*'):
+        try:
+            if rs(z + '/type') == name:
+                return int(rs(z + '/temp')) / 1000
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def temps():
+    """(battery, charger) in C; FAKE overrides both for tests: "batt chg"."""
+    try:
+        b, c = open(FAKE).read().split()[:2]
+        return float(b), float(c)
+    except (OSError, ValueError):
+        return zone('battery-thermal'), zone('charger-thermal')
+
+
+def mbox():
+    f = os.open('/dev/i2c-0', os.O_RDWR)
+    fcntl.ioctl(f, 0x0706, 0x25)        # I2C_SLAVE: the MAX77705 USB-C/PD MCU
+    return f
+
+
+def caps(f):
+    """(selected PDO, count, PDOs) of the source, from the mailbox (read only)."""
+    os.write(f, bytes([0x21, 0x30])); os.write(f, bytes([0x41, 0])); time.sleep(0.25)
+    os.write(f, bytes([0x51])); d = os.read(f, 32)
+    if d[0] != 0x30:
+        return 0, 0, []
+    n = d[1] & 7
+    return (d[1] >> 3) & 7, n, [int.from_bytes(d[2 + i * 4:6 + i * 4], 'little') for i in range(n)]
+
+
+def req(f, n):
+    os.write(f, bytes([0x21, 0x32, n])); os.write(f, bytes([0x41, 0])); time.sleep(0.8)
+
+
+def nine_volt(p):
+    for i, v in enumerate(p):
+        if v >> 30 == 0 and ((v >> 10) & 0x3ff) * 50 == 9000 and (v & 0x3ff) * 10 >= 1650:
+            return i + 1
+    return 0
+
+
+def ramp(t, full_at, floor_at, full):
+    if t <= full_at: return full
+    if t >= floor_at: return FLOOR
+    return int(full - (full - FLOOR) * (t - full_at) / (floor_at - full_at))
+
+
+class Thermal:
+    """Samsung's sec-battery style limits: battery stops at 50 C (resume 48) and ramps down
+    from 38 to 45 C; the charger chip stops at 80 C (resume 77) and ramps from 60 to 75 C."""
+    def __init__(s): s.stopped = False
+
+    def limit(s, b, c, full):
+        if b is None or c is None: return FLOOR
+        if s.stopped:
+            if 2 <= b <= 48 and c <= 77: s.stopped = False
+        elif b >= 50 or b < 0 or c >= 80:
+            s.stopped = True
+        if s.stopped: return 0
+        lim = min(ramp(b, 38, 45, full), ramp(c, 60, 75, full))
+        return min(lim, COLD_CAP) if b < 15 else lim
+
+
+def log(m):
+    print(time.strftime('%T'), m, 'batt/chg=%s in=%s cc=%s bat_ma=%d pct=%s %s' % (
+        temps(), int(rs(CH + 'input_current_limit')) // 1000, int(rs(CH + 'constant_charge_current')) // 1000,
+        int(rs(BA + 'current_now')) // 1000, rs(BA + 'capacity'), rs(CH + 'status')), flush=True)
+
+
+def main():
+    f = mbox(); th = Thermal()
+    fast = False; was = None; retry = 0; cur = None
+    setlim(SAFE_IN, SAFE_CC)
+    while True:
+        online = rs(CH + 'online') == '1'
+        b, c = temps()
+        if not online:
+            if was: setlim(SAFE_IN, SAFE_CC); log('unplugged')
+            fast = False; retry = 0; cur = None
+        else:
+            if was is False:
+                time.sleep(3)           # let PD finish after plugging in
+            hot = b is None or c is None or b >= 42 or c >= 60
+            if hot and fast:
+                setlim(500000, 500000); req(f, 1); setlim(SAFE_IN, SAFE_CC); fast = False; cur = None
+                log('too hot, 5V')
+            elif not hot and not fast and time.monotonic() >= retry:
+                try:
+                    idx = nine_volt(caps(f)[2])
+                except OSError:
+                    idx = 0
+                retry = time.monotonic() + (15 if not idx else 60)
+                if idx:
+                    setlim(500000, 500000); time.sleep(0.5); req(f, idx)
+                    if caps(f)[0] == idx:
+                        open(CH + 'input_current_limit', 'w').write(str(FAST_IN))
+                        fast = True; cur = None; log('9V')
+                    else:
+                        setlim(SAFE_IN, SAFE_CC); log('9V refused')
+            want = th.limit(b, c, (FAST_CC if fast else SAFE_CC) // 1000)
+            # down at once, up in steps: no hunting around a threshold
+            new = want if cur is None or want < cur else min(want, cur + STEP_UP)
+            if new != cur:
+                open(CH + 'constant_charge_current', 'w').write(str(max(new, 100) * 1000))
+                if cur is None or abs(new - cur) >= 200 or new == want:
+                    log('charge current %d mA' % new)
+                cur = new
+        was = online
+        time.sleep(3)
+
+
+if __name__ == '__main__':
+    main()

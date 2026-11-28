@@ -1,7 +1,7 @@
 From 9bd5f66358341b8ced897854fe5c9f5d8f3a8800 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:31:45 +0100
-Subject: [PATCH 42/59] drm/exynos2200: KMS driver for DECON0/DPP0 (takeover of
+Subject: [PATCH 42/60] drm/exynos2200: KMS driver for DECON0/DPP0 (takeover of
  the boot display)
 
 DECON0 runs in command mode with the panel's TE as trigger, DPP0 reading a

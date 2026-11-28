@@ -1,7 +1,7 @@
 From 893b08b9cefcf068f625dbff7bceffc8ac9351ad Mon Sep 17 00:00:00 2001
 From: JeyKul <jey@kulovac.de>
 Date: Fri, 20 Nov 2026 23:32:39 +0100
-Subject: [PATCH 31/59] WIP: drm/amdgpu: Xclipse 920: open() works, user BOs in
+Subject: [PATCH 31/60] WIP: drm/amdgpu: Xclipse 920: open() works, user BOs in
  GTT, CPU VM updates
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

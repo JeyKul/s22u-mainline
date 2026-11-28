@@ -1,7 +1,7 @@
 From 07b2bc25cf706ff675c69c3949ed5219f90945b3 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Fri, 27 Nov 2026 18:08:40 +0100
-Subject: [PATCH 46/59] drm/exynos2200: panel off/on for DPMS
+Subject: [PATCH 46/60] drm/exynos2200: panel off/on for DPMS
 
 The CRTC disable puts the S6E3HAE to sleep (display off, sleep in, inside
 the panel's level 1/2 keys, which it needs for these) and masks DECON's TE

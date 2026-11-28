@@ -1,7 +1,7 @@
 From 630dab509f8509e880818751032ed240a0c92612 Mon Sep 17 00:00:00 2001
 From: JeyKul <minkajey@gmail.com>
 Date: Fri, 20 Nov 2026 14:04:12 +0100
-Subject: [PATCH 08/59] firmware: samsung: acpm: add Exynos 2200 support
+Subject: [PATCH 08/60] firmware: samsung: acpm: add Exynos 2200 support
 
 Exynos 2200 ACPM firmware uses the gs101 shared-memory layout with the
 init data at 0xf800, and the exynos850 mailbox layout (doorbell in

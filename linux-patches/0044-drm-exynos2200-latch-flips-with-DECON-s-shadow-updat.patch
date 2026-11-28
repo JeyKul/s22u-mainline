@@ -1,7 +1,7 @@
 From 15dc34b965660a43c1f18ef468143b32755a6c99 Mon Sep 17 00:00:00 2001
 From: JeyKul <77121325+JeyKul@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:47:51 +0100
-Subject: [PATCH 44/59] drm/exynos2200: latch flips with DECON's shadow update;
+Subject: [PATCH 44/60] drm/exynos2200: latch flips with DECON's shadow update;
  connector always connected
 
 Request a global + all-windows shadow update after writing DPP0's address:
